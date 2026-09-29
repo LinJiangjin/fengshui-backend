@@ -44,6 +44,26 @@ def build_metrics(orientation: dict, palaces: list) -> list:
     ]
 
 
+def build_daily_advice(daily: dict) -> list:
+    """当日紫白提示：先说今日忌方，再说今日吉位。"""
+    if not daily:
+        return []
+    worst = daily["worst"]
+    best = daily["best"]
+    return [
+        {
+            "type": "warn",
+            "title": f"今日{worst['direction']}见{worst['star_name']}，宜静不宜动",
+            "desc": f"{daily['date']}（{daily['day_pillar']}日）{worst['star_name']}临{worst['direction']}；{worst['note']}",
+        },
+        {
+            "type": "good",
+            "title": f"今日吉位在{best['direction']}，宜重点利用",
+            "desc": f"{best['star_name']}临{best['direction']}，{best['note']}",
+        },
+    ]
+
+
 def build_advice(orientation: dict, palaces: list, extremes: dict) -> list:
     """重点提示：先说煞位，再说旺位，最后说坐向格局。"""
     advice = []

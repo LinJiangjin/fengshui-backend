@@ -10,6 +10,8 @@ class DiagnoseRequest(BaseModel):
     year: int = Field(2026, ge=1900, le=2100, description="流年")
     house_name: str = Field("我的房屋", description="房屋名称")
     area: float = Field(96.0, gt=0, description="建筑面积")
+    month: int = Field(0, ge=0, le=12, description="测算月份，0 表示今天（用于日家紫白）")
+    day: int = Field(0, ge=0, le=31, description="测算日期，0 表示今天（用于日家紫白）")
 
 
 class DiagnoseResponse(BaseModel):
@@ -22,6 +24,7 @@ class DiagnoseResponse(BaseModel):
     year: int
     house_name: str
     area: float
+    daily: dict = Field(default_factory=dict, description="当日紫白盘：今日吉位 / 今日忌方")
 
 
 # ---------------------------------------------------------------- 八字排盘
