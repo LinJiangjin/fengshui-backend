@@ -5,6 +5,7 @@ import datetime as dt
 
 from fastapi import APIRouter
 
+from ..engine.constants import RULES_VERSION
 from ..schemas import DiagnoseRequest
 from ..engine import (
     orient,
@@ -14,6 +15,8 @@ from ..engine import (
     build_metrics,
     build_advice,
     build_daily_advice,
+    build_furniture_tips,
+    build_layout_guide,
     daily_chart,
     enhance,
     resolve_date,
@@ -41,6 +44,14 @@ def diagnose(payload: DiagnoseRequest):
     daily = daily_chart(chart_date)
     advice = build_daily_advice(daily) + advice
 
+    # 家具摆放建议：按当日吉凶 + 流年星曜生成，供布局页展示
+    tips = build_furniture_tips(orientation, palaces, daily["best"], daily["worst"])
+
+    # 功能区布局建议表：按户型生成，前端不再自行推算
+    layout_guide = build_layout_guide(
+        payload.layout, orientation, palaces, daily["best"], daily["worst"]
+    )
+
     # L2 大模型增强（未配置时原样返回）
     context = {
         "orientation": orientation,
@@ -57,6 +68,9 @@ def diagnose(payload: DiagnoseRequest):
         "extremes": extremes,
         "metrics": metrics,
         "advice": advice,
+        "tips": tips,
+        "layout_guide": layout_guide,
+        "rules_version": RULES_VERSION,
         "year": payload.year,
         "house_name": payload.house_name,
         "area": payload.area,

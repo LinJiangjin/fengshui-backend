@@ -11,6 +11,7 @@ from .constants import (
     STAR_INFO,
     SCORE_BASE,
     SCORE_WEIGHT,
+    ROLE_BY_STAR,
 )
 
 ANCHOR_YEAR = 2024
@@ -73,6 +74,8 @@ def pick_extremes(palaces: list) -> dict:
             "trigram": best["trigram"],
             "star_name": best["star_name"],
             "label": best["label"],
+            # 角色名（财位 / 文昌位 / 喜庆位 …），前端直接展示，不要自行推断
+            "role": ROLE_BY_STAR.get(best["star"], best["label"]),
             "level": best["level"],
             "note": best["note"],
             "title": f"{best['direction']} · {best['label']}",
@@ -82,6 +85,8 @@ def pick_extremes(palaces: list) -> dict:
             "trigram": worst["trigram"],
             "star_name": worst["star_name"],
             "label": worst["label"],
+            # 角色名（五黄煞 / 病符位 / 破财位 …），不是一律叫「五黄」
+            "role": ROLE_BY_STAR.get(worst["star"], worst["label"]),
             "level": worst["level"],
             "note": worst["note"],
             "title": f"{worst['direction']} · {worst['star_name']}",

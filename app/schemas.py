@@ -1,15 +1,26 @@
 # -*- coding: utf-8 -*-
 """接口出入参模型。统一响应格式 {code, status, data}。"""
 
-from pydantic import BaseModel, Field
+import datetime as dt
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _this_year() -> int:
+    """流年默认值取服务端当前年，避免把年份写死在代码里。"""
+    return dt.date.today().year
 
 
 class DiagnoseRequest(BaseModel):
     degree: float = Field(..., ge=0, lt=360, description="手机读取的磁方位角")
     declination: float = Field(0.0, ge=-30, le=30, description="当地磁偏角")
-    year: int = Field(2026, ge=1900, le=2100, description="流年")
+    year: int = Field(
+        default_factory=_this_year, ge=1900, le=2100, description="流年（默认当前年）"
+    )
     house_name: str = Field("我的房屋", description="房屋名称")
-    area: float = Field(96.0, gt=0, description="建筑面积")
+    layout: str = Field("", max_length=20, description="户型，如「3室2厅」（用于生成布局建议表）")
+    area: float = Field(0.0, ge=0, description="建筑面积，0 表示未填")
     month: int = Field(0, ge=0, le=12, description="测算月份，0 表示今天（用于日家紫白）")
     day: int = Field(0, ge=0, le=31, description="测算日期，0 表示今天（用于日家紫白）")
 
@@ -25,6 +36,60 @@ class DiagnoseResponse(BaseModel):
     house_name: str
     area: float
     daily: dict = Field(default_factory=dict, description="当日紫白盘：今日吉位 / 今日忌方")
+    tips: list = Field(default_factory=list, description="家具摆放建议（按当日吉凶生成）")
+    layout_guide: list = Field(
+        default_factory=list, description="按户型生成的功能区布局建议表"
+    )
+    rules_version: str = Field("", description="本次计算所采用的规则集版本")
+
+
+# ---------------------------------------------------------------- 房屋档案
+class RoomIn(BaseModel):
+    """房间档案：房间名 + 所在宫位（0..8，与客户端 RoomProfile 一致）。"""
+
+    id: str = Field("", max_length=64, description="房间 id，为空则由服务端生成")
+    name: str = Field("", max_length=20, description="房间名，如 主卧")
+    cell: int = Field(4, ge=0, le=8, description="宫位索引 0..8")
+
+
+class HouseIn(BaseModel):
+    """新建 / 保存房屋。id 为空表示新建，由服务端生成。"""
+
+    id: str = Field("", max_length=64, description="房屋 id，为空则由服务端生成")
+    name: str = Field(..., min_length=1, max_length=60, description="房屋名称")
+    layout: str = Field("", max_length=20, description="户型，如 3室2厅")
+    area: float = Field(0.0, ge=0, description="建筑面积")
+    # None 表示尚未测量；入库前统一归一化到 [0, 360)
+    degree: Optional[float] = Field(None, description="磁北读数，None = 未测量")
+    declination: float = Field(0.0, ge=-30, le=30, description="当地磁偏角")
+    year: Optional[int] = Field(None, ge=1900, le=2100, description="流年，默认当前年")
+    rooms: list[RoomIn] = Field(default_factory=list, description="房间布局")
+
+
+class HousePatch(BaseModel):
+    """局部更新，用于罗盘测量后回写坐向等单字段改动。"""
+
+    degree: Optional[float] = Field(None, description="磁北读数")
+    declination: Optional[float] = Field(None, ge=-30, le=30, description="当地磁偏角")
+    name: Optional[str] = Field(None, min_length=1, max_length=60)
+    layout: Optional[str] = Field(None, max_length=20)
+    area: Optional[float] = Field(None, ge=0)
+    rooms: Optional[list[RoomIn]] = Field(None)
+
+
+class HouseOut(BaseModel):
+    """房屋出参；degree 为 null 表示尚未测量。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    layout: str = ""
+    area: float = 0.0
+    degree: Optional[float] = None
+    declination: float = 0.0
+    year: int = 0
+    rooms: list[RoomIn] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------- 八字排盘
@@ -36,10 +101,11 @@ class BaziRequest(BaseModel):
     day: int = Field(..., ge=1, le=31, description="出生日（公历 1-31）")
     hour: int = Field(..., ge=0, le=23, description="出生小时（北京时间 0-23）")
     minute: int = Field(0, ge=0, le=59, description="出生分钟（0-59）")
-    gender: str = Field("男", pattern=r"^(男|女)$", description="性别：男 / 女")
+    # 性别与经度直接决定排盘结果，必须显式传入，不能用默认值冒充用户资料
+    gender: str = Field(..., pattern=r"^(男|女)$", description="性别：男 / 女（必传）")
     longitude: float = Field(
-        120.0, ge=73.0, le=135.0,
-        description="出生地东经度数，用于真太阳时校正（每度 4 分钟）",
+        ..., ge=73.0, le=135.0,
+        description="出生地东经度数，用于真太阳时校正（每度 4 分钟）（必传）",
     )
     name: str = Field("", max_length=20, description="姓名（可选，仅作档案回显）")
 

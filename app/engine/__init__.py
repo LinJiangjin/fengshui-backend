@@ -23,7 +23,14 @@ from .daily_star import (  # noqa: F401
     xiazhi_of,
     yuan_of,
 )
-from .advice import build_advice, build_daily_advice, build_metrics, enhance  # noqa: F401
+from .advice import (  # noqa: F401
+    build_advice,
+    build_daily_advice,
+    build_furniture_tips,
+    build_layout_guide,
+    build_metrics,
+    enhance,
+)
 from .bazi import (  # noqa: F401
     apply_night_zi_fix,
     build_bazi,

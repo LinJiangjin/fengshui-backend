@@ -42,9 +42,23 @@ YUAN_NAMES = ("上元", "中元", "下元")
 
 DONGZHI_KEYS = ("冬至", "DONG_ZHI")
 XIAZHI_KEYS = ("夏至", "XIA_ZHI")
-# lunar-python 缺失时的近似交节日
+# lunar-python 缺失时的近似交节日。
+# 注意：这是近似值，交节当日前后可能与实际差一天，只在拿不到真实历法时使用，
+# 并且会通过 calendar_exact=false 告知调用方，不要把它当成权威日期。
 FALLBACK_DONGZHI = (12, 21)
 FALLBACK_XIAZHI = (6, 21)
+
+# 记录哪些年份实际走了近似值，供 jieqi_is_exact() 查询
+_FALLBACK_HITS: set[tuple[int, str]] = set()
+
+
+def jieqi_is_exact(year: int) -> bool:
+    """该年的节气是否取自真实历法。
+
+    False 表示用了近似交节日，日家紫白在交节当天附近可能偏差一天，
+    前端应据此给出提示，而不是把结果当成确定值展示。
+    """
+    return not any(y == year for y, _ in _FALLBACK_HITS)
 
 __all__ = [
     "build_daily_palaces",
@@ -77,6 +91,7 @@ def _jieqi_date(year: int, keys: tuple[str, ...], fallback: tuple[int, int]) -> 
                 y, m, d = (int(x) for x in solar.toYmd().split("-"))
                 if y == year:
                     return _dt.date(y, m, d)
+    _FALLBACK_HITS.add((year, keys[0]))
     return _dt.date(year, fallback[0], fallback[1])
 
 
@@ -213,4 +228,6 @@ def daily_chart(date: _dt.date) -> dict[str, Any]:
         "palaces": palaces,
         "best": extremes["best"],
         "worst": extremes["worst"],
+        # 节气是否为真实历法值；false 表示用了近似交节日，交节当天可能差一天
+        "calendar_exact": jieqi_is_exact(date.year),
     }
