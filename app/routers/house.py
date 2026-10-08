@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 """房屋档案路由：新建 / 编辑 / 测量回写 / 删除，全部落库。
 
-客户端不再只把房屋存在本地 SharedPreferences，改由服务端持久化：
+用户体系上线后，房屋与用户绑定：所有读写都在当前登录用户名下，
+跨用户访问一律返回 404（而非 403，避免泄露「该 id 存在」这一信息）。
+
     POST   /api/v1/houses          新建或更新（按 id upsert）
-    GET    /api/v1/houses          房屋列表
+    GET    /api/v1/houses          当前用户的房屋列表
     GET    /api/v1/houses/{id}     单条
     PATCH  /api/v1/houses/{id}     局部更新（罗盘测量后回写坐向）
     DELETE /api/v1/houses/{id}     删除
+
+注意：用户体系上线前的历史房屋记录 owner_id 为 NULL，不再出现在任何用户的
+列表里。如需保留，见 scripts/claim_orphan_houses.py。
 """
 
 import datetime as dt
@@ -16,7 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import House
+from ..deps import get_current_user
+from ..models import House, User
 from ..schemas import HouseIn, HouseOut, HousePatch, RoomIn
 
 router = APIRouter(prefix="/api/v1", tags=["house"])
@@ -54,20 +60,27 @@ def _out(row: House) -> dict:
     ).model_dump()
 
 
-def _get(db: Session, house_id: str) -> House:
+def _get_owned(db: Session, house_id: str, user: User) -> House:
+    """取当前用户名下的房屋；不存在或不属于自己都按 404 处理。"""
     row = db.get(House, house_id)
-    if row is None:
+    if row is None or row.owner_id != user.id:
         raise HTTPException(status_code=404, detail="房屋不存在")
     return row
 
 
 @router.post("/houses")
-def upsert_house(payload: HouseIn, db: Session = Depends(get_db)):
+def upsert_house(
+    payload: HouseIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """新建或更新一套房屋，并把结果原样返回（前端以服务端返回为准）。"""
-    house_id = payload.id.strip() or _new_id()
-    row = db.get(House, house_id)
-    if row is None:
-        row = House(id=house_id)
+    house_id = payload.id.strip()
+    if house_id:
+        row = _get_owned(db, house_id, user)  # 已有房屋：必须是自己名下的
+    else:
+        house_id = _new_id()
+        row = House(id=house_id, owner_id=user.id)
         db.add(row)
 
     row.name = payload.name.strip()
@@ -84,23 +97,37 @@ def upsert_house(payload: HouseIn, db: Session = Depends(get_db)):
 
 
 @router.get("/houses")
-def list_houses(db: Session = Depends(get_db)):
-    """房屋列表，按更新时间倒序。"""
-    rows = db.query(House).order_by(House.updated_at.desc()).all()
+def list_houses(
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """当前用户的房屋列表，按更新时间倒序。"""
+    rows = (
+        db.query(House)
+        .filter(House.owner_id == user.id)
+        .order_by(House.updated_at.desc())
+        .all()
+    )
     return ok({"total": len(rows), "items": [_out(r) for r in rows]})
 
 
 @router.get("/houses/{house_id}")
-def get_house(house_id: str, db: Session = Depends(get_db)):
-    return ok(_out(_get(db, house_id)))
+def get_house(
+    house_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return ok(_out(_get_owned(db, house_id, user)))
 
 
 @router.patch("/houses/{house_id}")
 def patch_house(
-    house_id: str, payload: HousePatch, db: Session = Depends(get_db)
+    house_id: str,
+    payload: HousePatch,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """局部更新：罗盘测量后回写坐向、保存布局方案等。"""
-    row = _get(db, house_id)
+    row = _get_owned(db, house_id, user)
     data = payload.model_dump(exclude_unset=True)
 
     if "degree" in data:
@@ -122,9 +149,15 @@ def patch_house(
 
 
 @router.delete("/houses/{house_id}")
-def delete_house(house_id: str, db: Session = Depends(get_db)):
+def delete_house(
+    house_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     row = db.get(House, house_id)
-    if row is not None:
+    owned = row is not None and row.owner_id == user.id
+    if owned:
         db.delete(row)
         db.commit()
-    return ok({"id": house_id, "deleted": row is not None})
+    # 不属于自己时同样返回 deleted=False，不暴露 id 是否存在
+    return ok({"id": house_id, "deleted": owned})

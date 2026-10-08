@@ -197,3 +197,156 @@ class BaziResponse(BaseModel):
     strength: BaziStrength
     favorable: list[BaziGod] = Field(default_factory=list, description="喜用神")
     unfavorable: list[BaziGod] = Field(default_factory=list, description="忌神")
+
+
+# ---------------------------------------------------------------- 用户 / 认证
+PHONE_PATTERN = r"^1[3-9]\d{9}$"
+
+
+class SendCodeRequest(BaseModel):
+    """请求发送短信验证码。"""
+
+    phone: str = Field(..., pattern=PHONE_PATTERN, description="中国大陆手机号")
+    scene: str = Field("login", max_length=20, description="业务场景，默认登录")
+
+
+class LoginRequest(BaseModel):
+    """手机号 + 验证码登录；用户不存在时自动注册。"""
+
+    phone: str = Field(..., pattern=PHONE_PATTERN)
+    code: str = Field(..., min_length=4, max_length=8, description="短信验证码")
+
+
+class UserOut(BaseModel):
+    """App 用户出参（App 端与后台共用）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    phone: str
+    nickname: str = ""
+    avatar: str = ""
+    status: str = "active"
+    ban_reason: str = ""
+    remark: str = ""
+    login_count: int = 0
+    last_login_at: Optional[dt.datetime] = None
+    created_at: Optional[dt.datetime] = None
+
+
+class UserProfileUpdate(BaseModel):
+    """用户自助修改资料。"""
+
+    nickname: Optional[str] = Field(None, max_length=40)
+    avatar: Optional[str] = Field(None, max_length=255)
+
+
+class LoginOut(BaseModel):
+    """登录成功返回：token + 用户资料，客户端一次拿全。"""
+
+    token: str
+    token_type: str = "Bearer"
+    expires_in: int = Field(0, description="token 有效期（秒）")
+    user: UserOut
+
+
+# ---------------------------------------------------------------- 管理后台
+class AdminLoginRequest(BaseModel):
+    """管理员账号密码登录。"""
+
+    username: str = Field(..., min_length=1, max_length=40)
+    password: str = Field(..., min_length=6, max_length=64)
+
+
+class AdminOut(BaseModel):
+    """管理员信息，绝不包含密码哈希。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    username: str
+    display_name: str = ""
+    status: str = "active"
+    last_login_at: Optional[dt.datetime] = None
+
+
+class AdminLoginOut(BaseModel):
+    token: str
+    token_type: str = "Bearer"
+    expires_in: int = 0
+    admin: AdminOut
+
+
+class PageMeta(BaseModel):
+    """统一分页信封。"""
+
+    total: int = 0
+    page: int = 1
+    size: int = 20
+    pages: int = 0
+
+
+class AdminUserItem(UserOut):
+    """后台列表项：用户资料 + 名下房屋数。"""
+
+    house_count: int = 0
+
+
+class AdminUserPage(BaseModel):
+    page_meta: PageMeta
+    items: list[AdminUserItem]
+
+
+class UserStatusUpdate(BaseModel):
+    """封禁 / 解封。value 只允许 active 或 banned。"""
+
+    status: str = Field(..., pattern=r"^(active|banned)$")
+    reason: str = Field("", max_length=200, description="封禁原因，解封时可留空")
+
+
+class UserRemarkUpdate(BaseModel):
+    """运营备注。"""
+
+    remark: str = Field("", max_length=200)
+
+
+class AdminHouseItem(BaseModel):
+    """后台房屋视图：多了归属用户信息。"""
+
+    id: str
+    owner_id: Optional[str] = None
+    owner_phone: str = ""
+    owner_nickname: str = ""
+    name: str = ""
+    layout: str = ""
+    area: float = 0.0
+    degree: Optional[float] = None
+    year: int = 0
+    room_count: int = 0
+    created_at: Optional[dt.datetime] = None
+    updated_at: Optional[dt.datetime] = None
+
+
+class AdminHousePage(BaseModel):
+    page_meta: PageMeta
+    items: list[AdminHouseItem]
+
+
+class TrendPoint(BaseModel):
+    """趋势图的一个数据点。"""
+
+    date: str = Field("", description="YYYY-MM-DD")
+    new_users: int = 0
+
+
+class StatsOut(BaseModel):
+    """后台看板统计。"""
+
+    total_users: int = 0
+    new_today: int = 0
+    new_7d: int = 0
+    active_7d: int = 0
+    banned_users: int = 0
+    total_houses: int = 0
+    measured_houses: int = Field(0, description="已完成罗盘测量的房屋数")
+    trend: list[TrendPoint] = Field(default_factory=list, description="近 14 天新增")

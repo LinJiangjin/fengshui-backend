@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from .admin import router as admin_router  # noqa: F401
+from .auth import router as auth_router  # noqa: F401
 from .diagnose import router as diagnose_router  # noqa: F401
 from .bazi import router as bazi_router  # noqa: F401
 from .library import router as library_router  # noqa: F401

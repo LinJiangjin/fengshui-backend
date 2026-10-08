@@ -47,3 +47,33 @@ POSTGRES_URL = "postgresql+psycopg://{user}:{password}@{host}:{port}/{db}".forma
 DATABASE_URL = _env("DATABASE_URL", "") or "sqlite:///" + str(
     BASE_DIR / "fengshui.db"
 ).replace("\\", "/")
+
+
+# ------------------------------------------------------------------ 鉴权
+# 生产环境必须在 .env 里覆盖 JWT_SECRET，否则任何人拿到源码即可伪造 token。
+JWT_SECRET = _env("JWT_SECRET", "dev-only-secret-change-me-in-production")
+JWT_ALGORITHM = _env("JWT_ALGORITHM", "HS256")
+# 后台 token 有效期长一些，避免运营频繁掉线
+JWT_EXPIRE_MINUTES = int(_env("JWT_EXPIRE_MINUTES", str(60 * 24 * 7)))
+
+# 业务时区偏移（小时）。时间统一按 UTC 存储，但「今日新增」这类统计
+# 要按运营所在时区切分，默认东八区。
+APP_TIMEZONE_OFFSET_HOURS = float(_env("APP_TIMEZONE_OFFSET_HOURS", "8"))
+
+
+# ------------------------------------------------------------------ 短信
+# provider: console = 验证码只写日志不发短信（开发用）；aliyun = 阿里云短信
+SMS_PROVIDER = _env("SMS_PROVIDER", "console")
+# console 模式下的固定验证码，方便本地联调不用翻日志
+SMS_DEV_CODE = _env("SMS_DEV_CODE", "888888")
+SMS_CODE_TTL_SECONDS = int(_env("SMS_CODE_TTL_SECONDS", "300"))
+# 同一手机号发送间隔（秒），防刷
+SMS_SEND_INTERVAL_SECONDS = int(_env("SMS_SEND_INTERVAL_SECONDS", "60"))
+# 单个验证码最多校验失败次数，超过后作废
+SMS_MAX_VERIFY_ATTEMPTS = int(_env("SMS_MAX_VERIFY_ATTEMPTS", "5"))
+
+# 阿里云短信所需配置（provider=aliyun 时才读）
+ALIYUN_SMS_ACCESS_KEY_ID = _env("ALIYUN_SMS_ACCESS_KEY_ID", "")
+ALIYUN_SMS_ACCESS_KEY_SECRET = _env("ALIYUN_SMS_ACCESS_KEY_SECRET", "")
+ALIYUN_SMS_SIGN_NAME = _env("ALIYUN_SMS_SIGN_NAME", "")
+ALIYUN_SMS_TEMPLATE_CODE = _env("ALIYUN_SMS_TEMPLATE_CODE", "")
