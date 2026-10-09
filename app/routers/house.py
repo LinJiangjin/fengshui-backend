@@ -74,10 +74,21 @@ def upsert_house(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """新建或更新一套房屋，并把结果原样返回（前端以服务端返回为准）。"""
+    """新建或更新一套房屋，并把结果原样返回（前端以服务端返回为准）。
+
+    App 端新建房屋时会在本地预生成 id（house_<时间戳>），
+    首次保存时库里还没有这条记录，按该 id 创建并归属当前用户；
+    只有 id 已存在且不属于当前用户时才返回 404（不泄露他人房屋的存在性）。
+    """
     house_id = payload.id.strip()
     if house_id:
-        row = _get_owned(db, house_id, user)  # 已有房屋：必须是自己名下的
+        row = db.get(House, house_id)
+        if row is None:
+            # 客户端预生成 id 的首次落库
+            row = House(id=house_id, owner_id=user.id)
+            db.add(row)
+        elif row.owner_id != user.id:
+            raise HTTPException(status_code=404, detail="房屋不存在")
     else:
         house_id = _new_id()
         row = House(id=house_id, owner_id=user.id)
