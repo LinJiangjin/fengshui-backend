@@ -11,6 +11,8 @@
     GET    /api/v1/admin/stats                  看板统计
     GET    /api/v1/admin/houses                 房屋数据分页列表
     DELETE /api/v1/admin/houses/{id}            删除房屋
+    GET    /api/v1/admin/bazi-profiles          命理档案分页列表（用户录入的出生信息）
+    DELETE /api/v1/admin/bazi-profiles/{id}     删除命理档案
 
 除 login 外全部依赖 `require_admin`，App 端用户 token 访问一律 401。
 """
@@ -24,8 +26,10 @@ from sqlalchemy.orm import Session
 from ..config import APP_TIMEZONE_OFFSET_HOURS
 from ..db import get_db
 from ..deps import require_admin
-from ..models import Admin, House, User
+from ..models import Admin, BaziProfile, House, User
 from ..schemas import (
+    AdminBaziProfileItem,
+    AdminBaziProfilePage,
     AdminHouseItem,
     AdminHousePage,
     AdminLoginOut,
@@ -368,7 +372,10 @@ def list_houses(
         .all()
     )
 
-    items = [
+    # 传模型实例而非 model_dump() 的 dict：AdminHousePage.items 声明为
+    # list[AdminHouseItem]，list 类型参数不变，dict 不能顶替模型（也省掉一轮
+    # dict -> 模型的重复校验）。最终由外层 .model_dump() 统一序列化。
+    items: list[AdminHouseItem] = [
         AdminHouseItem(
             id=house.id,
             owner_id=house.owner_id,
@@ -382,7 +389,7 @@ def list_houses(
             room_count=len(house.rooms or []),
             created_at=house.created_at,
             updated_at=house.updated_at,
-        ).model_dump()
+        )
         for house, user in rows
     ]
     return ok(
@@ -406,3 +413,78 @@ def delete_house(
     db.delete(house)
     db.commit()
     return ok({"id": house_id, "deleted": True})
+
+
+# ------------------------------------------------------------------ 命理档案
+@router.get("/bazi-profiles")
+def list_bazi_profiles(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    keyword: str = Query("", max_length=40, description="姓名 / 用户手机号 / 昵称"),
+    gender: str = Query("", description="性别筛选：男 / 女，留空表示全部"),
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """命理档案分页列表，带归属用户信息。"""
+    if gender not in ("", "男", "女"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="gender 只支持 男 / 女",
+        )
+
+    query = db.query(BaziProfile, User).outerjoin(
+        User, BaziProfile.owner_id == User.id
+    )
+
+    kw = keyword.strip()
+    if kw:
+        like = f"%{kw}%"
+        query = query.filter(
+            or_(
+                BaziProfile.name.like(like),
+                User.phone.like(like),
+                User.nickname.like(like),
+            )
+        )
+    if gender:
+        query = query.filter(BaziProfile.gender == gender)
+
+    total = query.count()
+    _, offset, pages = page_bounds(total, page, size)
+    rows = (
+        query.order_by(BaziProfile.updated_at.desc(), BaziProfile.id.desc())
+        .offset(offset)
+        .limit(size)
+        .all()
+    )
+
+    items: list[AdminBaziProfileItem] = []
+    for profile, user in rows:
+        item = AdminBaziProfileItem.model_validate(profile)
+        # 归属用户信息不在档案模型里，单独补上
+        item.owner_id = profile.owner_id
+        item.owner_phone = user.phone if user else ""
+        item.owner_nickname = user.nickname if user else ""
+        items.append(item)
+
+    return ok(
+        AdminBaziProfilePage(
+            page_meta=PageMeta(total=total, page=page, size=size, pages=pages),
+            items=items,
+        ).model_dump()
+    )
+
+
+@router.delete("/bazi-profiles/{profile_id}")
+def delete_bazi_profile(
+    profile_id: str,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """删除命理档案（违规内容清理用）。"""
+    profile = db.get(BaziProfile, profile_id)
+    if profile is None:
+        raise _not_found("命理档案不存在")
+    db.delete(profile)
+    db.commit()
+    return ok({"id": profile_id, "deleted": True})

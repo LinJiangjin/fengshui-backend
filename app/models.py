@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ORM 模型：用户体系 + 房屋档案。
+"""ORM 模型：用户体系 + 房屋档案 + 命理档案。
 
-- users      App 端用户，手机号唯一，走短信验证码登录
-- admins     管理后台账号，独立于 users，权限边界分离
-- sms_codes  短信验证码（落库而非内存，避免多进程 / 重启丢失）
-- houses     房屋档案，通过 owner_id 归属到某个用户
+- users          App 端用户，手机号唯一，走短信验证码登录
+- admins         管理后台账号，独立于 users，权限边界分离
+- sms_codes      短信验证码（落库而非内存，避免多进程 / 重启丢失）
+- houses         房屋档案，通过 owner_id 归属到某个用户
+- bazi_profiles  命理档案（出生信息），一个用户一份，通过 owner_id 归属
 """
 
 import datetime as dt
@@ -139,6 +140,53 @@ class House(Base):
 
     # 房间布局：JSON 数组 [{id, name, cell}]，与客户端 RoomProfile 一一对应
     rooms: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class BaziProfile(Base):
+    """命理档案表：记录用户录入过的出生信息，一个用户一份。
+
+    重新录入即覆盖同一条（不新增历史版本），保证「我的档案」语义唯一。
+    真太阳时校正只认 longitude，因此这里**不存经度默认值**：
+    App 端必须把用户看到的那份经度原样提交上来。
+    """
+
+    __tablename__ = "bazi_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # 归属用户；NULL 表示历史遗留数据（用户体系上线前创建的）
+    owner_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
+    # 档案回显用：姓名（可选）与性别
+    name: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    gender: Mapped[str] = mapped_column(String(4), nullable=False, default="男")
+
+    # 公历出生时刻（北京时间），与 BaziRequest 字段一一对应
+    year: Mapped[int] = mapped_column(Integer, nullable=False, default=1900)
+    month: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    day: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    hour: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    minute: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # 出生地：province / city 仅作回显（如「广东 · 广州」），longitude 才用于排盘
+    province: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    city: Mapped[str] = mapped_column(String(30), nullable=False, default="")
+    longitude: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    # 四柱摘要（如「辛未 丁酉 癸未 丙辰」），保存时由排盘引擎算出，供后台一眼查看
+    pillars: Mapped[str] = mapped_column(String(40), nullable=False, default="")
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

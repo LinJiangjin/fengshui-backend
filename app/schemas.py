@@ -350,3 +350,95 @@ class StatsOut(BaseModel):
     total_houses: int = 0
     measured_houses: int = Field(0, description="已完成罗盘测量的房屋数")
     trend: list[TrendPoint] = Field(default_factory=list, description="近 14 天新增")
+
+
+# ---------------------------------------------------------------- 命理档案
+class BaziProfileIn(BaseModel):
+    """保存命理档案的入参：出生时刻 + 出生地。
+
+    与 BaziRequest 保持同名字段，便于 App 端一次录入同时排盘与存档；
+    province / city 只用于回显与后台展示，不参与计算。
+    """
+
+    year: int = Field(..., ge=1900, le=2100, description="出生年（公历）")
+    month: int = Field(..., ge=1, le=12, description="出生月（公历 1-12）")
+    day: int = Field(..., ge=1, le=31, description="出生日（公历 1-31）")
+    hour: int = Field(..., ge=0, le=23, description="出生小时（北京时间 0-23）")
+    minute: int = Field(0, ge=0, le=59, description="出生分钟（0-59）")
+    gender: str = Field(..., pattern=r"^(男|女)$", description="性别：男 / 女")
+    longitude: float = Field(
+        ..., ge=73.0, le=135.0,
+        description="出生地东经度数，用于真太阳时校正（必传，不兜底）",
+    )
+    name: str = Field("", max_length=20, description="姓名（可选）")
+    province: str = Field("", max_length=20, description="出生地省份，如 广东")
+    city: str = Field("", max_length=30, description="出生地城市，如 广州")
+
+
+class BaziProfileOut(BaziProfileIn):
+    """命理档案出参：多了记录 id、四柱摘要与时间戳。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = ""
+    pillars: str = Field("", description="四柱摘要，如「辛未 丁酉 癸未 丙辰」")
+    created_at: Optional[dt.datetime] = None
+    updated_at: Optional[dt.datetime] = None
+
+
+class AdminBaziProfileItem(BaziProfileOut):
+    """后台命理档案列表项：多了归属用户信息。"""
+
+    owner_id: Optional[str] = None
+    owner_phone: str = ""
+    owner_nickname: str = ""
+
+
+class AdminBaziProfilePage(BaseModel):
+    page_meta: PageMeta
+    items: list[AdminBaziProfileItem]
+
+
+# ---------------------------------------------------------------- 紫微斗数
+class ZiweiRequest(BaziRequest):
+    """紫微排盘入参：与八字排盘完全一致（同一份出生信息，两种算法）。
+
+    紫微同样以真太阳时定时辰，因此经度必传、不做默认值兜底。
+    """
+
+
+class ZiweiPalace(BaseModel):
+    """紫微十二宫之一：宫名、宫位干支与星曜。"""
+
+    name: str = ""
+    zhi: str = ""
+    gan: str = ""
+    pillar: str = ""
+    main: list[str] = Field(default_factory=list, description="主星（可能两颗同宫）")
+    aux: list[str] = Field(default_factory=list, description="辅星")
+    si_hua: list[dict] = Field(default_factory=list, description="四化：[{star, hua}]")
+    is_ming: bool = False
+    is_shen: bool = False
+    is_empty: bool = Field(False, description="空宫（无主星，需借对宫参看）")
+    da_xian: dict = Field(default_factory=dict, description="该宫对应的大限年龄段")
+
+
+class ZiweiResponse(BaseModel):
+    """紫微命盘 + 感情 / 职业 / 运势解读。"""
+
+    birth: dict = Field(default_factory=dict, description="出生信息（含真太阳时）")
+    basic: dict = Field(
+        default_factory=dict,
+        description="命宫 / 身宫 / 五行局 / 紫微落宫等基本信息",
+    )
+    palaces: list[ZiweiPalace] = Field(default_factory=list)
+    da_xian: dict = Field(default_factory=dict, description="当前十年大限")
+    san_fang: dict = Field(default_factory=dict, description="三方四正")
+    reading: dict = Field(
+        default_factory=dict,
+        description="感情 / 职业 / 运势三段解读",
+    )
+    years: list[dict] = Field(
+        default_factory=list,
+        description="逐年流年运势（默认自今年起 10 年）",
+    )

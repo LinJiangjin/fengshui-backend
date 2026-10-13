@@ -19,18 +19,20 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import Base, engine, ping
-from app.models import Admin, House, SmsCode, User  # noqa: F401  导入即注册表
+from app.models import Admin, BaziProfile, House, SmsCode, User  # noqa: F401  导入即注册表
 from app.routers import (
     admin_router,
     auth_router,
+    bazi_profile_router,
     bazi_router,
     diagnose_router,
     house_router,
     library_router,
+    ziwei_router,
 )
 
 # 建表后需要存在的业务表，启动时打印便于确认
-_EXPECTED_TABLES = ("admins", "users", "sms_codes", "houses")
+_EXPECTED_TABLES = ("admins", "users", "sms_codes", "houses", "bazi_profiles")
 
 
 @asynccontextmanager
@@ -116,6 +118,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(diagnose_router)
 app.include_router(bazi_router)
+app.include_router(bazi_profile_router)
+app.include_router(ziwei_router)
 app.include_router(library_router)
 app.include_router(house_router)
 app.include_router(auth_router)
