@@ -49,6 +49,12 @@ def get_current_user(
     user = db.get(User, payload.get("sub") or "")
     if user is None:
         raise _unauthorized("用户不存在")
+    # 注销与封禁都会让 status 离开 active，但提示语不同：
+    # 注销是用户自己的选择，不该回一句「账号已被封禁」。
+    if user.status == "deleted":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="账号已注销"
+        )
     if user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

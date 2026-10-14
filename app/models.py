@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""ORM 模型：用户体系 + 房屋档案 + 命理档案。
+"""ORM 模型：用户体系 + 房屋档案 + 命理档案 + 运营内容。
 
 - users          App 端用户，手机号唯一，走短信验证码登录
 - admins         管理后台账号，独立于 users，权限边界分离
 - sms_codes      短信验证码（落库而非内存，避免多进程 / 重启丢失）
 - houses         房屋档案，通过 owner_id 归属到某个用户
 - bazi_profiles  命理档案（出生信息），一个用户一份，通过 owner_id 归属
+- schemes        装修方案（运营内容，后台增删改，App 端只读）
+- element_notes  五行宜忌解读，按五行复用，被同五行的所有方案共享
 """
 
 import datetime as dt
@@ -150,6 +152,76 @@ class House(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class Scheme(Base):
+    """装修方案（运营内容）。
+
+    这类数据以前写死在 routers/library.py 里，运营想换一版文案都得改代码发版；
+    现在落库，由管理后台（/api/v1/admin/schemes）维护，App 端只读。
+
+    色值列名为 from_color / to_color——`from` 是 Python 关键字，不能作列名；
+    下发到 App 时会映射回 from / to（见 routers/library.py）。
+    """
+
+    __tablename__ = "schemes"
+
+    # 主键：初始化数据用可读 slug（如 ink-zen，与老版本一致，便于分享链接不失效），
+    # 后台新建的用 new_id("sch") 生成
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    title: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    # 副标题如「五行属木 · 96㎡」，由运营填，App 直接展示
+    subtitle: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    # 风格标签（新中式 / 日式侘寂 / 现代原木…），App 顶部 chips 按它筛
+    tag: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    # 五行：木 / 火 / 土 / 金 / 水，决定套用哪条 element_notes 解读
+    element: Mapped[str] = mapped_column(String(4), nullable=False, default="木")
+    area: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # 卡片渐变的两端色
+    from_color: Mapped[str] = mapped_column(String(9), nullable=False, default="#E4DCCB")
+    to_color: Mapped[str] = mapped_column(String(9), nullable=False, default="#C0A97E")
+
+    summary: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+
+    # 亮点条目：[str, ...]
+    highlights: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 主色板：[{name, hex}, ...]
+    colors: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # 分区配色：[{name, hex, note}, ...]
+    rooms: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    # 上架开关：下架后 App 端列表与详情都查不到，但数据留着可随时恢复
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 展示顺序，越小越靠前；同值再按创建时间倒序
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class ElementNote(Base):
+    """五行宜忌解读。
+
+    方案详情页的「宜 / 忌」不是逐条方案写的，而是按方案所属五行复用，
+    因此单独成表：改一条解读，同五行的所有方案同步生效。
+    """
+
+    __tablename__ = "element_notes"
+
+    element: Mapped[str] = mapped_column(String(4), primary_key=True)
+    fit: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    avoid: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    # 五行相生序（木火土金水）的展示顺序
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class BaziProfile(Base):

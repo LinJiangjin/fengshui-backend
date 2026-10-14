@@ -13,11 +13,20 @@
     DELETE /api/v1/admin/houses/{id}            删除房屋
     GET    /api/v1/admin/bazi-profiles          命理档案分页列表（用户录入的出生信息）
     DELETE /api/v1/admin/bazi-profiles/{id}     删除命理档案
+    GET    /api/v1/admin/schemes                装修方案分页列表（运营内容）
+    GET    /api/v1/admin/schemes/{id}           方案详情
+    POST   /api/v1/admin/schemes                新建方案
+    PUT    /api/v1/admin/schemes/{id}           全量更新方案
+    PATCH  /api/v1/admin/schemes/{id}/status    上架 / 下架
+    DELETE /api/v1/admin/schemes/{id}           删除方案
+    GET    /api/v1/admin/element-notes          五行宜忌解读列表
+    PUT    /api/v1/admin/element-notes/{element} 更新某行五行的解读
 
 除 login 外全部依赖 `require_admin`，App 端用户 token 访问一律 401。
 """
 
 import datetime as dt
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
@@ -26,7 +35,7 @@ from sqlalchemy.orm import Session
 from ..config import APP_TIMEZONE_OFFSET_HOURS
 from ..db import get_db
 from ..deps import require_admin
-from ..models import Admin, BaziProfile, House, User
+from ..models import Admin, BaziProfile, ElementNote, House, Scheme, User
 from ..schemas import (
     AdminBaziProfileItem,
     AdminBaziProfilePage,
@@ -35,9 +44,15 @@ from ..schemas import (
     AdminLoginOut,
     AdminLoginRequest,
     AdminOut,
+    AdminSchemeItem,
+    AdminSchemePage,
     AdminUserItem,
     AdminUserPage,
+    ElementNoteItem,
+    ElementNoteUpdate,
     PageMeta,
+    SchemeIn,
+    SchemeStatusUpdate,
     StatsOut,
     TrendPoint,
     UserOut,
@@ -45,7 +60,16 @@ from ..schemas import (
     UserStatusUpdate,
 )
 from ..security import create_token, verify_password
-from ..utils import as_aware, local_date_str, local_day_start_utc, now_utc, page_bounds
+# 五行相生序（木火土金水）：新建解读时按它排位，与初始化数据保持同一口径
+from ..seed_library import ELEMENT_ORDER as _ELEMENT_SORT_ORDER
+from ..utils import (
+    as_aware,
+    local_date_str,
+    local_day_start_utc,
+    new_id,
+    now_utc,
+    page_bounds,
+)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -114,7 +138,9 @@ def list_users(
     size: int = Query(20, ge=1, le=100),
     keyword: str = Query("", max_length=40, description="手机号 / 昵称 / id 模糊匹配"),
     user_status: str = Query(
-        "", alias="status", description="active / banned，空表示全部"
+        "",
+        alias="status",
+        description="active / banned / deleted，空表示全部（不含已注销）",
     ),
     current: Admin = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -128,8 +154,12 @@ def list_users(
         query = query.filter(
             or_(User.phone.like(like), User.nickname.like(like), User.id.like(like))
         )
-    if user_status in ("active", "banned"):
+    if user_status in ("active", "banned", "deleted"):
         query = query.filter(User.status == user_status)
+    else:
+        # 默认不展示已注销账号：注销后只剩一条匿名化空壳（手机号已抹除），
+        # 混在列表里没有运营价值，要看需显式传 status=deleted
+        query = query.filter(User.status != "deleted")
 
     total = query.count()
     _, offset, pages = page_bounds(total, page, size)
@@ -284,18 +314,31 @@ def stats(
     today_start = local_day_start_utc(0)
     week_start = local_day_start_utc(6)
 
-    total_users = db.query(func.count(User.id)).scalar() or 0
+    # 已注销账号（status=deleted）不计入任何用户口径：注销后它只剩一条匿名化
+    # 空壳，手机号已抹除，不代表任何现存用户。若计入，看板会显示"看得见却联系
+    # 不上"的幽灵用户。房屋与档案在注销时已物理删除，因此那两个口径无需过滤。
+    alive = User.status != "deleted"
+
+    total_users = db.query(func.count(User.id)).filter(alive).scalar() or 0
     new_today = (
-        db.query(func.count(User.id)).filter(User.created_at >= today_start).scalar()
+        db.query(func.count(User.id))
+        .filter(alive, User.created_at >= today_start)
+        .scalar()
         or 0
     )
     new_7d = (
-        db.query(func.count(User.id)).filter(User.created_at >= week_start).scalar()
+        db.query(func.count(User.id))
+        .filter(alive, User.created_at >= week_start)
+        .scalar()
         or 0
     )
     active_7d = (
         db.query(func.count(User.id))
-        .filter(User.last_login_at.isnot(None), User.last_login_at >= week_start)
+        .filter(
+            alive,
+            User.last_login_at.isnot(None),
+            User.last_login_at >= week_start,
+        )
         .scalar()
         or 0
     )
@@ -311,7 +354,9 @@ def stats(
     span_days = 14
     trend_start = local_day_start_utc(span_days - 1)
     created_rows = (
-        db.query(User.created_at).filter(User.created_at >= trend_start).all()
+        db.query(User.created_at)
+        .filter(alive, User.created_at >= trend_start)
+        .all()
     )
     offset = dt.timedelta(hours=APP_TIMEZONE_OFFSET_HOURS)
     buckets: dict[str, int] = {}
@@ -488,3 +533,240 @@ def delete_bazi_profile(
     db.delete(profile)
     db.commit()
     return ok({"id": profile_id, "deleted": True})
+
+
+# ------------------------------------------------------------------ 方案库
+def _scheme_fields(payload: SchemeIn) -> dict:
+    """把入参整理成可直接写库的列值。
+
+    - 文本两端空格统一去掉：运营在后台粘贴文案时很容易带上；
+    - 色值统一转大写，和 App 端既有素材保持一致；
+    - 空字符串的亮点条目直接丢弃，避免详情页出现空行。
+    """
+    data = payload.model_dump()
+    return {
+        "title": data["title"].strip(),
+        "subtitle": data["subtitle"].strip(),
+        "tag": data["tag"].strip(),
+        "element": data["element"],
+        "area": data["area"],
+        "from_color": data["from_color"].upper(),
+        "to_color": data["to_color"].upper(),
+        "summary": data["summary"].strip(),
+        "highlights": [h.strip() for h in data["highlights"] if h.strip()],
+        "colors": data["colors"],
+        "rooms": data["rooms"],
+        "published": data["published"],
+        "sort_order": data["sort_order"],
+    }
+
+
+def _scheme_to_item(scheme: Scheme) -> AdminSchemeItem:
+    """库里一行 -> 后台出参。文本字段已由写入侧校验，这里直接透传。"""
+    return AdminSchemeItem(
+        id=scheme.id,
+        title=scheme.title or "",
+        subtitle=scheme.subtitle or "",
+        tag=scheme.tag or "",
+        element=scheme.element or "",
+        area=scheme.area or 0,
+        from_color=scheme.from_color or "",
+        to_color=scheme.to_color or "",
+        summary=scheme.summary or "",
+        highlights=[str(h) for h in (scheme.highlights or [])],
+        colors=list(scheme.colors or []),
+        rooms=list(scheme.rooms or []),
+        published=bool(scheme.published),
+        sort_order=scheme.sort_order or 0,
+        created_at=scheme.created_at,
+        updated_at=scheme.updated_at,
+    )
+
+
+@router.get("/schemes")
+def list_schemes(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    keyword: str = Query("", max_length=40, description="标题 / 副标题 / 风格 / 方案 id"),
+    element: str = Query("", description="五行筛选：木 火 土 金 水，留空表示全部"),
+    published: str = Query("", description="published / draft，留空表示全部"),
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """装修方案分页列表。后台能看到已下架的方案，App 端看不到。"""
+    if element and not re.fullmatch(r"[木火土金水]", element):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="element 只支持 木 / 火 / 土 / 金 / 水",
+        )
+    if published not in ("", "published", "draft"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="published 只支持 published / draft",
+        )
+
+    query = db.query(Scheme)
+
+    kw = keyword.strip()
+    if kw:
+        like = f"%{kw}%"
+        query = query.filter(
+            or_(
+                Scheme.title.like(like),
+                Scheme.subtitle.like(like),
+                Scheme.tag.like(like),
+                Scheme.id.like(like),
+            )
+        )
+    if element:
+        query = query.filter(Scheme.element == element)
+    if published == "published":
+        query = query.filter(Scheme.published.is_(True))
+    elif published == "draft":
+        query = query.filter(Scheme.published.is_(False))
+
+    total = query.count()
+    _, offset, pages = page_bounds(total, page, size)
+    rows = (
+        query.order_by(Scheme.sort_order.asc(), Scheme.id.asc())
+        .offset(offset)
+        .limit(size)
+        .all()
+    )
+
+    return ok(
+        AdminSchemePage(
+            page_meta=PageMeta(total=total, page=page, size=size, pages=pages),
+            items=[_scheme_to_item(row) for row in rows],
+        ).model_dump()
+    )
+
+
+@router.get("/schemes/{scheme_id}")
+def get_scheme(
+    scheme_id: str,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """方案详情（后台编辑表单回填用）。"""
+    scheme = db.get(Scheme, scheme_id)
+    if scheme is None:
+        raise _not_found("方案不存在")
+    return ok(_scheme_to_item(scheme).model_dump())
+
+
+@router.post("/schemes")
+def create_scheme(
+    payload: SchemeIn,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """新建方案。id 由服务端生成，不接受客户端指定。"""
+    scheme = Scheme(id=new_id("sch"), **_scheme_fields(payload))
+    db.add(scheme)
+    db.commit()
+    db.refresh(scheme)
+    return ok(_scheme_to_item(scheme).model_dump())
+
+
+@router.put("/schemes/{scheme_id}")
+def update_scheme(
+    scheme_id: str,
+    payload: SchemeIn,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """全量更新方案。
+
+    用全量覆盖而非 PATCH：后台表单本来就把整条方案一次提交，
+    部分更新反而容易让「提交了但没生效」这类问题变难查。
+    """
+    scheme = db.get(Scheme, scheme_id)
+    if scheme is None:
+        raise _not_found("方案不存在")
+
+    for field, value in _scheme_fields(payload).items():
+        setattr(scheme, field, value)
+    db.commit()
+    db.refresh(scheme)
+    return ok(_scheme_to_item(scheme).model_dump())
+
+
+@router.patch("/schemes/{scheme_id}/status")
+def update_scheme_status(
+    scheme_id: str,
+    payload: SchemeStatusUpdate,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """上架 / 下架。下架只是从 App 端隐藏，数据保留可随时恢复。"""
+    scheme = db.get(Scheme, scheme_id)
+    if scheme is None:
+        raise _not_found("方案不存在")
+    scheme.published = payload.published
+    db.commit()
+    db.refresh(scheme)
+    return ok(_scheme_to_item(scheme).model_dump())
+
+
+@router.delete("/schemes/{scheme_id}")
+def delete_scheme(
+    scheme_id: str,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """删除方案。不可恢复，运营侧需二次确认。"""
+    scheme = db.get(Scheme, scheme_id)
+    if scheme is None:
+        raise _not_found("方案不存在")
+    db.delete(scheme)
+    db.commit()
+    return ok({"id": scheme_id, "deleted": True})
+
+
+# ------------------------------------------------------------------ 五行解读
+@router.get("/element-notes")
+def list_element_notes(
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """五行宜忌解读列表。方案详情页的「宜 / 忌」按方案所属五行取这里。"""
+    rows = (
+        db.query(ElementNote)
+        .order_by(ElementNote.sort_order.asc(), ElementNote.element.asc())
+        .all()
+    )
+    return ok([ElementNoteItem.model_validate(row).model_dump() for row in rows])
+
+
+@router.put("/element-notes/{element}")
+def upsert_element_note(
+    element: str,
+    payload: ElementNoteUpdate,
+    current: Admin = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """更新某行五行的解读。
+
+    用 upsert 而非纯 update：新增一行五行时不必先手工插记录，
+    少了「忘了初始化就改不动」这类运营侧卡点。
+    """
+    if not re.fullmatch(r"[木火土金水]", element):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="五行只支持 木 / 火 / 土 / 金 / 水",
+        )
+
+    note = db.get(ElementNote, element)
+    if note is None:
+        note = ElementNote(
+            element=element,
+            sort_order=_ELEMENT_SORT_ORDER.get(element, 99),
+        )
+        db.add(note)
+
+    note.fit = payload.fit.strip()
+    note.avoid = payload.avoid.strip()
+    db.commit()
+    db.refresh(note)
+    return ok(ElementNoteItem.model_validate(note).model_dump())

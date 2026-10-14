@@ -5,6 +5,14 @@
 """
 
 from .compass import orient, degree_to_mountain, normalize_degree  # noqa: F401
+from .bazhai import (  # noqa: F401
+    build_bazhai,
+    lichun_year,
+    ming_gua_number,
+    ming_gua_of,
+    you_nian_of,
+    zhai_gua_of,
+)
 from .flying_star import (  # noqa: F401
     build_palaces,
     center_star_of_year,
@@ -30,6 +38,16 @@ from .advice import (  # noqa: F401
     build_layout_guide,
     build_metrics,
     enhance,
+)
+from .almanac import (  # noqa: F401
+    activity_of,
+    day_almanac,
+    day_score,
+    list_activities,
+    month_overview,
+    parse_date,
+    resolve_day,
+    select_dates,
 )
 from .ziwei import (  # noqa: F401
     build_ziwei,

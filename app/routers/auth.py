@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """认证路由：手机号 + 短信验证码登录。
 
-    POST   /api/v1/auth/send-code   发送验证码
-    POST   /api/v1/auth/login       验证码登录（新手机号自动注册）
-    GET    /api/v1/auth/me          当前用户资料
-    PATCH  /api/v1/auth/me          修改昵称 / 头像
+    POST   /api/v1/auth/send-code        发送验证码
+    POST   /api/v1/auth/login            验证码登录（新手机号自动注册）
+    GET    /api/v1/auth/me               当前用户资料
+    PATCH  /api/v1/auth/me               修改昵称 / 头像
+    POST   /api/v1/auth/delete-account   注销账号（不可恢复）
 
 App 端没有密码体系：验证码即凭证。管理员登录走 /api/v1/admin/login，两套 token 不通用。
 """
 
 import datetime as dt
 import random
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -24,8 +26,10 @@ from ..config import (
 )
 from ..db import get_db
 from ..deps import get_current_user
-from ..models import SmsCode, User
+from ..models import BaziProfile, House, SmsCode, User
 from ..schemas import (
+    DeleteAccountOut,
+    DeleteAccountRequest,
     LoginOut,
     LoginRequest,
     SendCodeRequest,
@@ -191,3 +195,66 @@ def update_me(
     db.commit()
     db.refresh(current)
     return ok(UserOut.model_validate(current).model_dump())
+
+
+@router.post("/delete-account")
+def delete_account(
+    payload: DeleteAccountRequest,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """注销账号（不可恢复）。个人信息保护法下的账号删除入口。
+
+    处置策略分两类，理由不同：
+
+    - **物理删除**：命理档案、房屋档案、短信验证码记录。这三类都是实打实的
+      个人信息（出生时刻、住址特征、手机号），注销时即刻抹掉。
+    - **匿名化保留**：用户行本身。清空昵称 / 头像 / 备注 / 封禁原因，手机号
+      改写为不可逆标记值，status 置 deleted。这样手机号被释放（同一号码可重新
+      注册成全新账号），而 created_at / login_count 等统计字段留存，后台看板
+      不会因为用户注销而出现数据断层。
+
+    匿名化后 status != active，get_current_user 会直接拒绝，旧 token 立即失效。
+    """
+    if not payload.confirm:
+        raise _bad_request("请确认后再执行注销")
+
+    user_id = current.id
+    phone = current.phone
+
+    removed_bazi = (
+        db.query(BaziProfile)
+        .filter(BaziProfile.owner_id == user_id)
+        .delete(synchronize_session=False)
+    )
+    removed_houses = (
+        db.query(House)
+        .filter(House.owner_id == user_id)
+        .delete(synchronize_session=False)
+    )
+    # 验证码按手机号清理：注销后这些码既无用途，也不该继续留存
+    removed_sms = (
+        db.query(SmsCode)
+        .filter(SmsCode.phone == phone)
+        .delete(synchronize_session=False)
+    )
+
+    # 手机号必须改写：phone 上有 unique 约束，不改写同一号码就再也注册不了。
+    # 固定 16 字符，留足 phone 列 20 的上限，且与手机号格式明显区分，
+    # 运营在后台一眼能看出这是已注销账号。
+    current.phone = f"del-{uuid.uuid4().hex[:12]}"
+    current.nickname = ""
+    current.avatar = ""
+    current.remark = ""
+    current.ban_reason = ""
+    current.status = "deleted"
+    db.commit()
+
+    return ok(
+        DeleteAccountOut(
+            user_id=user_id,
+            removed_bazi_profiles=removed_bazi,
+            removed_houses=removed_houses,
+            removed_sms_codes=removed_sms,
+        ).model_dump()
+    )

@@ -2,7 +2,7 @@
 """接口出入参模型。统一响应格式 {code, status, data}。"""
 
 import datetime as dt
-from typing import Optional
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -241,6 +241,26 @@ class UserProfileUpdate(BaseModel):
     avatar: Optional[str] = Field(None, max_length=255)
 
 
+class DeleteAccountRequest(BaseModel):
+    """注销账号入参。
+
+    confirm 必须是显式的 True——注销不可恢复，不允许「空 body 直接打过来」
+    这种误触路径。
+    """
+
+    confirm: bool = Field(False, description="必须显式传 true 才会执行注销")
+
+
+class DeleteAccountOut(BaseModel):
+    """注销结果：回报各类数据的清理数量，便于客服核对与客户端提示。"""
+
+    deleted: bool = True
+    user_id: str = ""
+    removed_bazi_profiles: int = 0
+    removed_houses: int = 0
+    removed_sms_codes: int = 0
+
+
 class LoginOut(BaseModel):
     """登录成功返回：token + 用户资料，客户端一次拿全。"""
 
@@ -399,6 +419,92 @@ class AdminBaziProfilePage(BaseModel):
     items: list[AdminBaziProfileItem]
 
 
+# ---------------------------------------------------------------- 方案库（运营内容）
+# 色值统一 #RRGGBB；五行限定 木火土金水——这两条卡在入参上，
+# 免得后台填进来的脏数据把 App 端渲染搞坏（客户端按定长解析 hex）。
+HEX_PATTERN = r"^#[0-9A-Fa-f]{6}$"
+ELEMENT_PATTERN = r"^(木|火|土|金|水)$"
+
+# 单条亮点文案，避免运营把一整篇文章塞进一个条目
+HighlightText = Annotated[str, Field(min_length=1, max_length=140)]
+
+
+class SchemeColorIn(BaseModel):
+    """方案主色板里的一块色。"""
+
+    name: str = Field(..., min_length=1, max_length=20)
+    hex: str = Field(..., pattern=HEX_PATTERN)
+
+
+class SchemeRoomIn(BaseModel):
+    """分区配色建议：某个房间用什么色、怎么用。"""
+
+    name: str = Field(..., min_length=1, max_length=20)
+    hex: str = Field(..., pattern=HEX_PATTERN)
+    note: str = Field("", max_length=120)
+
+
+class SchemeIn(BaseModel):
+    """方案的创建 / 全量更新入参。
+
+    色值字段命名为 from_color / to_color——`from` 是 Python 关键字，不能作列名；
+    下发到 App 时由 routers/library.py 映射回 from / to。
+    """
+
+    title: str = Field(..., min_length=1, max_length=60)
+    subtitle: str = Field("", max_length=80, description="如「五行属木 · 96㎡」")
+    tag: str = Field(..., min_length=1, max_length=20, description="风格标签，如「新中式」")
+    element: str = Field(..., pattern=ELEMENT_PATTERN, description="五行：木 火 土 金 水")
+    area: int = Field(0, ge=0, le=1000, description="建筑面积（㎡）")
+    from_color: str = Field(..., pattern=HEX_PATTERN, description="卡片渐变起始色")
+    to_color: str = Field(..., pattern=HEX_PATTERN, description="卡片渐变结束色")
+    summary: str = Field("", max_length=300)
+    highlights: list[HighlightText] = Field(default_factory=list, max_length=12)
+    colors: list[SchemeColorIn] = Field(default_factory=list, max_length=12)
+    rooms: list[SchemeRoomIn] = Field(default_factory=list, max_length=16)
+    published: bool = Field(True, description="是否上架；下架后 App 端不可见")
+    sort_order: int = Field(0, ge=0, le=9999, description="展示顺序，越小越靠前")
+
+
+class AdminSchemeItem(SchemeIn):
+    """后台方案出参：多了 id 与时间戳。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = ""
+    created_at: Optional[dt.datetime] = None
+    updated_at: Optional[dt.datetime] = None
+
+
+class AdminSchemePage(BaseModel):
+    page_meta: PageMeta
+    items: list[AdminSchemeItem]
+
+
+class SchemeStatusUpdate(BaseModel):
+    """上架 / 下架。"""
+
+    published: bool
+
+
+class ElementNoteItem(BaseModel):
+    """五行宜忌解读。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    element: str = ""
+    fit: str = ""
+    avoid: str = ""
+    sort_order: int = 0
+
+
+class ElementNoteUpdate(BaseModel):
+    """更新某一行五行的解读文案。"""
+
+    fit: str = Field("", max_length=200)
+    avoid: str = Field("", max_length=200)
+
+
 # ---------------------------------------------------------------- 紫微斗数
 class ZiweiRequest(BaziRequest):
     """紫微排盘入参：与八字排盘完全一致（同一份出生信息，两种算法）。
@@ -442,3 +548,424 @@ class ZiweiResponse(BaseModel):
         default_factory=list,
         description="逐年流年运势（默认自今年起 10 年）",
     )
+
+
+# ---------------------------------------------------------------- 八宅游年
+class BazhaiRequest(BaseModel):
+    """八宅排盘入参：出生年 + 性别定命卦，坐向（或宅卦）定宅卦。
+
+    宅卦二者取一：给了 ``degree`` 就用罗盘度数推算（顺带返回坐向明细），
+    否则用 ``trigram`` 直接指定。两者都缺时接口返回 400。
+
+    命卦以立春为界，因此 `month`/`day` 传了就会用于分界；
+    只传年份（month=day=0）则按整年计，不做分界。
+    """
+
+    year: int = Field(..., ge=1900, le=2100, description="出生年（公历）")
+    gender: str = Field(..., pattern=r"^(男|女)$", description="性别：男 / 女（必传）")
+    month: int = Field(0, ge=0, le=12, description="出生月（用于立春分界），0 表示不分界")
+    day: int = Field(0, ge=0, le=31, description="出生日（用于立春分界），0 表示不分界")
+    hour: int = Field(0, ge=0, le=23, description="出生小时（用于立春分界）")
+    minute: int = Field(0, ge=0, le=59, description="出生分钟（用于立春分界）")
+    degree: Optional[float] = Field(
+        None, ge=0, lt=360, description="手机读取的磁方位角；为空则用 trigram"
+    )
+    declination: float = Field(0.0, ge=-30, le=30, description="当地磁偏角")
+    trigram: str = Field(
+        "", max_length=4, description="直接指定宅卦（坐山卦），如「坎」；degree 为空时使用"
+    )
+    name: str = Field("", max_length=20, description="姓名（可选，仅作档案回显）")
+
+
+class BazhaiBirth(BaseModel):
+    """八宅所用的出生信息（含立春分界结果）。"""
+
+    year: int = Field(0, description="出生年（公历）")
+    month: int = 0
+    day: int = 0
+    gender: str = Field("男", description="男 / 女")
+    name: str = ""
+    solar_year: int = Field(
+        0, description="命卦归属年份：立春前出生为上一年"
+    )
+    lichun_adjusted: bool = Field(False, description="是否因立春而回退到上一年")
+    summary: str = Field("", description="卡片副标题，如「1990 年生 · 男 · 东四命」")
+
+
+class BazhaiGua(BaseModel):
+    """命卦 / 宅卦的公共字段。"""
+
+    trigram: str = Field("", description="八卦名：乾坎艮震巽离坤兑")
+    name: str = Field("", description="如「坎命」「坎宅」")
+    luoshu: int = Field(0, ge=0, le=9, description="洛书数 1-9")
+    direction: str = Field("", description="卦位方位，如「正北」")
+    group: str = Field("", description="东四命 / 西四命 / 东四宅 / 西四宅")
+    label: str = Field("", description="展示用组合文案，如「坎命 · 东四命」")
+
+
+class MingGuaOut(BazhaiGua):
+    """本命卦：命卦只由出生年与性别决定，含东西四分组与调整说明。"""
+
+    number: int = Field(0, ge=0, le=9, description="命卦洛书数（余 5 男寄坤 2、女寄艮 8）")
+    group_key: str = Field("", description="东四 / 西四")
+    solar_year: int = 0
+    lichun_adjusted: bool = False
+    name_input: str = ""
+    summary: str = ""
+    note: str = ""
+
+
+class ZhaiGuaOut(BazhaiGua):
+    """宅卦：以坐山卦定；未提供度数时坐向明细为空。"""
+
+    group_key: str = ""
+    description: str = Field("", description="坐向吉凶评语")
+    mountain: str = Field("", description="坐山，如「子」")
+    facing: str = Field("", description="向山，如「午」")
+    title: str = Field("", description="坐向合写，如「子山午向」")
+    readable: str = Field("", description="如「坐北朝南」")
+    facing_trigram: str = ""
+    facing_direction: str = ""
+    degree: Optional[float] = None
+
+
+class BazhaiStar(BaseModel):
+    """游年八星之一。level 复用九星四档，前端配色可直接沿用。"""
+
+    code: str = Field("", description="生 / 天 / 延 / 伏 / 祸 / 六 / 五 / 绝")
+    star: str = Field("", description="生气 / 天医 / 延年 / 伏位 / 祸害 / 六煞 / 五鬼 / 绝命")
+    alias: str = Field("", description="星曜别名，如「贪狼」")
+    element: str = Field("", description="五行")
+    level: str = Field("", description="旺 / 平 / 煞 / 大凶")
+    trigram: str = Field("", description="该星所在之宫")
+    direction: str = Field("", description="该宫方位，如「东南」")
+    luoshu: int = Field(0, ge=0, le=9, description="该宫洛书数")
+    meaning: str = Field("", description="星曜释义")
+    suitable: list[str] = Field(default_factory=list, description="宜作何用")
+    avoid: list[str] = Field(default_factory=list, description="忌作何用")
+    is_base: bool = Field(False, description="是否伏位（本卦宫）")
+
+
+class BazhaiCompat(BaseModel):
+    """宅命匹配：东四命宜东四宅、西四命宜西四宅。"""
+
+    matched: bool = False
+    same_gua: bool = Field(False, description="命卦与宅卦同宫")
+    level: str = Field("", description="同宫 / 相配 / 不配")
+    score: int = Field(0, ge=0, le=100)
+    ming_group: str = ""
+    zhai_group: str = ""
+    summary: str = ""
+    advice: list[str] = Field(default_factory=list, description="调和路径")
+
+
+class BazhaiRoom(BaseModel):
+    """某功能房间的选位建议（按宅卦游年）。"""
+
+    key: str = ""
+    name: str = Field("", description="大门 / 卧室 / 厨房 / 卫生间 …")
+    recommend: list[dict] = Field(default_factory=list, description="推荐方位，按优先级")
+    avoid: list[dict] = Field(default_factory=list, description="忌用方位")
+    headline: str = Field("", description="首选方位文案，如「东南 · 生气」")
+    note: str = Field("", description="传统依据一句话")
+
+
+class BazhaiDirections(BaseModel):
+    """本命吉方：床位、书桌、办公位的朝向依据。"""
+
+    lucky: list[dict] = Field(default_factory=list, description="本命四吉方")
+    unlucky: list[dict] = Field(default_factory=list, description="本命四凶方")
+    summary: str = ""
+    bed: str = Field("", description="床位朝向建议")
+    desk: str = Field("", description="书桌朝向建议")
+
+
+class BazhaiResponse(BaseModel):
+    """八宅盘：命卦 + 宅卦 + 游年八星 + 宅命匹配 + 房间选位。"""
+
+    birth: BazhaiBirth
+    ming_gua: MingGuaOut
+    zhai_gua: ZhaiGuaOut
+    compat: BazhaiCompat
+    stars: list[BazhaiStar] = Field(
+        default_factory=list, description="宅卦游年八星，自乾起顺时针 8 项"
+    )
+    auspicious: list[BazhaiStar] = Field(
+        default_factory=list, description="四吉方，按吉次排序"
+    )
+    inauspicious: list[BazhaiStar] = Field(
+        default_factory=list, description="四凶方，按凶重排序"
+    )
+    ming_stars: list[BazhaiStar] = Field(
+        default_factory=list, description="命卦游年八星（个人吉方）"
+    )
+    ming_directions: BazhaiDirections
+    rooms: list[BazhaiRoom] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list, description="行动要点")
+    rules_version: str = Field("", description="本次计算所采用的规则集版本")
+
+
+# ---------------------------------------------------------------- 黄历 / 择日
+class AlmanacLunar(BaseModel):
+    """农历日期。"""
+
+    text: str = Field("", description="完整农历串，如「二〇二六年九月初五」")
+    year: str = ""
+    month: str = Field("", description="含「月」字，如「九月」")
+    day: str = Field("", description="如「初五」")
+    is_leap: bool = Field(False, description="是否闰月")
+
+
+class AlmanacGanZhi(BaseModel):
+    """年月日干支与生肖。"""
+
+    year: str = ""
+    month: str = ""
+    day: str = ""
+    year_animal: str = ""
+    month_animal: str = ""
+    day_animal: str = ""
+
+
+class AlmanacXun(BaseModel):
+    """旬与旬空。"""
+
+    name: str = Field("", description="日柱所在旬，如「甲寅」")
+    kong: str = Field("", description="旬空二支，如「子丑」")
+
+
+class AlmanacJianChu(BaseModel):
+    """建除十二神。tone 为吉凶档：大吉 / 黄道 / 黑道 / 大凶。"""
+
+    name: str = ""
+    label: str = Field("", description="如「闭日」")
+    tone: str = ""
+    meaning: str = ""
+    good: str = Field("", description="该日所宜")
+    bad: str = Field("", description="该日所忌")
+    motto: str = Field("", description="分档口诀，便于用户理解依据")
+
+
+class AlmanacTianShen(BaseModel):
+    """日家十二天神（黄道六神 / 黑道六神）。"""
+
+    name: str = ""
+    type: str = Field("", description="黄道 / 黑道")
+    luck: str = Field("", description="吉 / 凶")
+    meaning: str = ""
+
+
+class AlmanacXiu(BaseModel):
+    """二十八宿。"""
+
+    name: str = ""
+    full: str = Field("", description="全名，如「轸水蚓」")
+    animal: str = Field("", description="宿主禽")
+    mansion: str = Field("", description="所属四象，如「南方朱雀」")
+    luck: str = Field("", description="吉 / 凶")
+
+
+class AlmanacChong(BaseModel):
+    """冲煞。"""
+
+    zodiac: str = Field("", description="所冲生肖")
+    desc: str = Field("", description="如「(乙卯)兔」")
+    sha: str = Field("", description="煞方，如「东」")
+
+
+class AlmanacPengZu(BaseModel):
+    """彭祖百忌。"""
+
+    gan: str = ""
+    zhi: str = ""
+
+
+class AlmanacGod(BaseModel):
+    """五神方位之一。"""
+
+    key: str = ""
+    name: str = Field("", description="喜神 / 福神 / 财神 / 阳贵 / 阴贵")
+    direction: str = ""
+
+
+class AlmanacHour(BaseModel):
+    """单个时辰的黄黑道与宜忌。
+
+    子时按历法库拆为「早子时」（00:00-00:59）与「晚子时」（23:00-23:59），
+    两者干支与吉凶不同，故一次返回 13 项而非 12 项，由 slot_label 区分。
+    """
+
+    index: int = 0
+    branch: str = ""
+    label: str = Field("", description="如「子时」")
+    slot_label: str = Field("", description="如「子时（早）」")
+    range: str = Field("", description="如「00:00–00:59」")
+    gan_zhi: str = ""
+    na_yin: str = ""
+    tian_shen: str = ""
+    tian_shen_type: str = Field("", description="黄道 / 黑道")
+    luck: str = Field("", description="吉 / 凶")
+    is_lucky: bool = False
+    chong: dict = Field(default_factory=dict)
+    cai_direction: str = Field("", description="该时辰财神方位")
+    yi: list[str] = Field(default_factory=list)
+    ji: list[str] = Field(default_factory=list)
+
+
+class AlmanacPurpleWhite(BaseModel):
+    """当日紫白（复用日家紫白引擎）。"""
+
+    center_star: int = 0
+    center_star_name: str = ""
+    escape: str = ""
+    escape_desc: str = ""
+    yuan: str = ""
+    # 与每日紫白盘同结构：best / worst 各是一个方位对象而非列表
+    best: dict = Field(default_factory=dict, description="今日吉位")
+    worst: dict = Field(default_factory=dict, description="今日忌方")
+    calendar_exact: bool = Field(True, description="节气是否取自真实历法")
+
+
+class AlmanacDay(BaseModel):
+    """一日通书。"""
+
+    date: str
+    weekday: str = ""
+    weekday_index: int = Field(0, ge=0, le=6)
+    lunar: AlmanacLunar
+    gan_zhi: AlmanacGanZhi
+    xun: AlmanacXun
+    solar_term: str = Field("", description="当日若交节则为节气名，否则空")
+    solar_term_range: str = Field("", description="所处节气区间，如「寒露后 · 霜降前」")
+    jian_chu: AlmanacJianChu
+    tian_shen: AlmanacTianShen
+    xiu: AlmanacXiu
+    chong: AlmanacChong
+    na_yin: str = ""
+    yi: list[str] = Field(default_factory=list, description="宜（已剔除字面量「无」）")
+    ji: list[str] = Field(default_factory=list, description="忌")
+    all_avoid: bool = Field(False, description="忌项含「诸事不宜」")
+    ji_shen: list[str] = Field(default_factory=list)
+    xiong_sha: list[str] = Field(default_factory=list)
+    peng_zu: AlmanacPengZu
+    five_gods: list[AlmanacGod] = Field(default_factory=list)
+    hours: list[AlmanacHour] = Field(default_factory=list, description="十三时辰")
+    lucky_hours: list[AlmanacHour] = Field(default_factory=list)
+    unlucky_hours: list[AlmanacHour] = Field(default_factory=list)
+    purple_white: AlmanacPurpleWhite
+    score: int = Field(0, ge=0, le=100, description="当日总体吉凶分（不含具体事项）")
+    level: str = ""
+    tone: str = ""
+    score_reasons: list[str] = Field(default_factory=list, description="逐条打分依据")
+    rules_version: str = ""
+
+
+class AlmanacActivity(BaseModel):
+    """可择日的事项。"""
+
+    key: str
+    name: str
+    terms: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class AlmanacLuckyHour(BaseModel):
+    """择日结果中的可用吉时。"""
+
+    label: str = ""
+    range: str = ""
+    tian_shen: str = ""
+    gan_zhi: str = ""
+
+
+class AlmanacPick(BaseModel):
+    """择日结果的一条候选日。"""
+
+    date: str
+    weekday: str = ""
+    lunar: str = ""
+    gan_zhi: str = Field("", description="日干支")
+    jian_chu: str = ""
+    jian_chu_label: str = ""
+    jian_chu_tone: str = ""
+    tian_shen: str = ""
+    tian_shen_type: str = ""
+    xiu: str = ""
+    xiu_luck: str = ""
+    chong: AlmanacChong
+    score: int = Field(0, ge=0, le=100)
+    level: str = ""
+    tone: str = ""
+    hits: list[str] = Field(default_factory=list, description="命中的宜项")
+    misses: list[str] = Field(default_factory=list, description="命中的忌项")
+    reasons: list[str] = Field(default_factory=list, description="逐条打分依据")
+    clash: bool = Field(False, description="是否冲用户生肖")
+    lucky_hour_count: int = 0
+    lucky_hours: list[AlmanacLuckyHour] = Field(default_factory=list)
+    best_hour: str = ""
+
+
+class AlmanacSelectRequest(BaseModel):
+    """择日入参。"""
+
+    activity: str = Field(..., min_length=1, description="事项 key，见 /almanac/activities")
+    start_date: Optional[str] = Field(
+        None, description="起始日期 YYYY-MM-DD；缺省为今天"
+    )
+    days: int = Field(30, ge=1, le=366, description="扫描天数")
+    zodiac: Optional[str] = Field(
+        None, max_length=2, description="用户生肖，用于避冲；留空则不避"
+    )
+    limit: int = Field(8, ge=1, le=60, description="返回候选条数")
+    min_score: int = Field(0, ge=0, le=100, description="分数下限")
+
+
+class AlmanacSelectRange(BaseModel):
+    start: str = ""
+    end: str = ""
+    days: int = 0
+
+
+class AlmanacSelectResponse(BaseModel):
+    """择日结果。"""
+
+    activity: AlmanacActivity
+    range: AlmanacSelectRange
+    zodiac: str = ""
+    min_score: int = 0
+    scanned: int = Field(0, description="实际扫描天数")
+    recommended_count: int = Field(0, description="达标条数（可能大于 items 长度）")
+    items: list[AlmanacPick] = Field(default_factory=list, description="按分数降序")
+    best: Optional[AlmanacPick] = Field(None, description="区间内最高分的一天")
+    rules_version: str = ""
+
+
+class AlmanacCalendarDay(BaseModel):
+    """月历中的单日。"""
+
+    date: str
+    day: int = 0
+    weekday: str = ""
+    lunar_day: str = ""
+    score: int = Field(0, ge=0, le=100)
+    level: str = ""
+    tone: str = ""
+    jian_chu: str = ""
+    xiu: str = ""
+    xiu_luck: str = ""
+    chong: str = ""
+    clash: bool = False
+    lucky_hour_count: int = 0
+
+
+class AlmanacCalendar(BaseModel):
+    """整月每日吉凶（月历热力）。"""
+
+    year: int
+    month: int
+    activity: Optional[dict] = Field(None, description="为空表示当日总体吉凶")
+    zodiac: str = ""
+    first_weekday: int = Field(0, ge=0, le=6, description="当月 1 日是周几，0=周一")
+    days: list[AlmanacCalendarDay] = Field(default_factory=list)
+    best: Optional[AlmanacCalendarDay] = None
+    rules_version: str = ""

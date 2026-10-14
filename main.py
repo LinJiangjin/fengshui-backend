@@ -18,21 +18,52 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.db import Base, engine, ping
-from app.models import Admin, BaziProfile, House, SmsCode, User  # noqa: F401  导入即注册表
+from app.config import APP_ENV, CORS_ALLOW_ORIGIN_REGEX, CORS_ALLOW_ORIGINS
+from app.db import Base, SessionLocal, engine, ping
+from app.models import (  # noqa: F401  导入即注册表
+    Admin,
+    BaziProfile,
+    ElementNote,
+    House,
+    Scheme,
+    SmsCode,
+    User,
+)
 from app.routers import (
     admin_router,
+    almanac_router,
     auth_router,
     bazi_profile_router,
     bazi_router,
+    bazhai_router,
     diagnose_router,
     house_router,
+    legal_router,
     library_router,
     ziwei_router,
 )
+from app.seed_library import seed_library
 
 # 建表后需要存在的业务表，启动时打印便于确认
-_EXPECTED_TABLES = ("admins", "users", "sms_codes", "houses", "bazi_profiles")
+_EXPECTED_TABLES = (
+    "admins",
+    "users",
+    "sms_codes",
+    "houses",
+    "bazi_profiles",
+    "schemes",
+    "element_notes",
+)
+
+
+def _cors_summary() -> str:
+    """回显实际生效的跨域策略，避免上线后靠猜。"""
+    parts = []
+    if CORS_ALLOW_ORIGINS:
+        parts.append("origins=" + ",".join(CORS_ALLOW_ORIGINS))
+    if CORS_ALLOW_ORIGIN_REGEX:
+        parts.append(f"regex={CORS_ALLOW_ORIGIN_REGEX}")
+    return " | ".join(parts) if parts else "DISABLED（不允许任何跨域来源）"
 
 
 @asynccontextmanager
@@ -42,6 +73,12 @@ async def lifespan(app: FastAPI):
     建表失败不阻断启动——计算类接口（诊断 / 排盘）本就不依赖数据库，
     只有用户体系与房屋档案落库会受影响，届时接口会返回明确错误。
     """
+    print(f"[startup] env={APP_ENV} cors: {_cors_summary()}")
+    if APP_ENV == "prod" and not CORS_ALLOW_ORIGINS:
+        print(
+            "[startup] WARNING: APP_ENV=prod 但未配置 CORS_ALLOW_ORIGINS，"
+            "所有跨域请求都会被拒绝（App 原生端不走 CORS，不受影响）"
+        )
     db_ok, db_info = ping()
     print(f"[startup] database: {'connected' if db_ok else 'UNAVAILABLE'} -> {db_info}")
     if db_ok:
@@ -50,6 +87,20 @@ async def lifespan(app: FastAPI):
             print(f"[startup] tables ready: {', '.join(_EXPECTED_TABLES)}")
         except SQLAlchemyError as exc:
             print(f"[startup] create tables failed: {exc}")
+        else:
+            # 方案库初始内容：只在表为空时写入，不会覆盖运营改过的数据
+            session = SessionLocal()
+            try:
+                seeded_schemes, seeded_notes = seed_library(session)
+                if seeded_schemes or seeded_notes:
+                    print(
+                        "[startup] 方案库初始化完成："
+                        f"{seeded_schemes} 个方案 / {seeded_notes} 条五行解读"
+                    )
+            except Exception as exc:  # noqa: BLE001  初始化失败不该拦住服务启动
+                print(f"[startup] seed library failed: {exc}")
+            finally:
+                session.close()
     yield
 
 
@@ -57,18 +108,21 @@ app = FastAPI(
     title="风水装修 App API",
     version="0.3.0",
     description=(
-        "定坐向 -> 出报告；生辰 -> 排八字。"
+        "定坐向 -> 出报告；生辰 -> 排八字 / 紫微 / 八宅；查日课 -> 黄历择日。"
         "数值由确定性规则引擎计算，不经过大模型。"
         "用户体系：手机号 + 短信验证码；管理后台独立 token。"
     ),
     lifespan=lifespan,
 )
 
-# 开发阶段允许 Flutter 调试端与本地管理后台直连。
-# 上线前务必收敛为具体域名，否则等于对所有站点开放。
+# 跨域来源按环境收敛，不再无脑放行 "*"（那等于对所有站点开放）。
+# 白名单见 .env 的 CORS_ALLOW_ORIGINS；dev 环境额外放行本机任意端口，
+# 因为 Flutter Web 的调试端口是随机分配的。
+# 注意：App 原生端（Android / iOS）不走 CORS，此处配置只影响 Web 端与后台。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -120,9 +174,12 @@ app.include_router(diagnose_router)
 app.include_router(bazi_router)
 app.include_router(bazi_profile_router)
 app.include_router(ziwei_router)
+app.include_router(bazhai_router)
+app.include_router(almanac_router)
 app.include_router(library_router)
 app.include_router(house_router)
 app.include_router(auth_router)
+app.include_router(legal_router)
 app.include_router(admin_router)
 
 

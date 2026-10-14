@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
 from .bazi import day_pillar_from_anchor
 from .constants import FLYING_ORDER, PALACE_BY_LUOSHU, STAR_INFO
 from .flying_star import pick_extremes
+from .lunar_cache import INSTALLED as _LUNAR_YEAR_CACHE  # noqa: F401  装多年份历法表缓存
 
 # 日柱锚点：1900-01-01 为甲戌日（六十甲子序号 10），故甲子日为 1899-12-22
 _DAY_ANCHOR_DATE = _dt.date(1900, 1, 1)
