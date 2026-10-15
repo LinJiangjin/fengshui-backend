@@ -10,6 +10,7 @@ import datetime as _dt
 import unittest
 
 from app.engine.ziwei import (
+    PALACE_PLAIN,
     TIANFU_SERIES,
     ZIWEI_PALACES,
     ZIWEI_SERIES,
@@ -19,7 +20,7 @@ from app.engine.ziwei import (
     wu_xing_ju,
     ziwei_palace,
 )
-from app.engine.ziwei_reading import build_ziwei_reading
+from app.engine.ziwei_reading import STAR_PLAIN, build_ziwei_reading
 from app.engine.ziwei_year import build_ziwei_years, gan_zhi_of_year
 
 MAIN14 = [
@@ -282,6 +283,153 @@ class ZiweiYearTest(unittest.TestCase):
         self.assertGreater(palaces_later, palaces_first)
 
 
+class ZiweiPlainLanguageTest(unittest.TestCase):
+    """白话层契约：行话必须有解释，不能只甩术语给用户。
+
+    这一组测试锁的是「可读性」这个产品需求：
+    页面上出现的每个术语（命宫 / 身宫 / 四化 / 空宫 / 大限 / 太岁…）
+    都要能在同一份响应里找到一句大白话解释，且解析出来的 docstring
+    不要退化成只有术语的黑话串。
+    """
+
+    # 页面上会出现的核心行话，术语表必须逐一覆盖
+    CORE_JARGON = (
+        "命宫", "身宫", "主星", "空宫", "四化", "大限", "太岁", "五行局",
+    )
+    # 四化四个名目各自的白话关键词
+    HUA_KEYWORD = {
+        "化禄": "机会与资源",
+        "化权": "主导与掌控",
+        "化科": "名声与贵人",
+        "化忌": "反复与牵挂",
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.chart = build_ziwei(1991, 9, 10, 7, 35, "男", 113.26)
+        cls.reading = build_ziwei_reading(cls.chart)
+        cls.years = build_ziwei_years(cls.chart, 1991, 2026, 10)
+
+    # ---------------------------------------------------------- 基本信息
+    def test_basic_plain_translates_jargon(self):
+        """「命宫丁丑 · 身宫官禄 · 水二局」这句行话要有一段白话版。"""
+        plain = self.chart["basic"]["plain"]
+        self.assertTrue(plain)
+        for word in ("命宫", "身宫", "起运", "紫微"):
+            self.assertIn(word, plain, word)
+        self.assertIn(
+            self.chart["basic"]["shen_palace"], plain, "白话里要点出身宫落在哪一宫"
+        )
+
+    # ---------------------------------------------------------- 术语表
+    def test_guide_covers_core_jargon(self):
+        guide = {item["term"]: item["plain"] for item in self.reading["guide"]}
+        for term in self.CORE_JARGON:
+            matched = [t for t in guide if term in t]
+            self.assertTrue(matched, f"术语表缺少「{term}」")
+            for t in matched:
+                self.assertTrue(guide[t], f"「{t}」的解释不能为空")
+        self.assertTrue(self.reading["guide_intro"])
+
+    def test_guide_explains_four_hua_one_by_one(self):
+        """四化要在术语表里一次性讲全禄权科忌，不需要用户再去搜。"""
+        text = next(
+            item["plain"] for item in self.reading["guide"] if "四化" in item["term"]
+        )
+        for hua, keyword in self.HUA_KEYWORD.items():
+            self.assertIn(hua, text, hua)
+            self.assertIn(keyword, text, hua)
+
+    # ---------------------------------------------------------- 十二宫
+    def test_every_palace_has_short_plain(self):
+        """十二宫都要带「这一宫管什么」，且短到能塞进宫位小卡片一行。"""
+        self.assertEqual(len(self.chart["palaces"]), 12)
+        plains = [p["plain"] for p in self.chart["palaces"]]
+        self.assertTrue(all(plains), "十二宫都要有 plain")
+        self.assertEqual(len(set(plains)), 12, "十二宫的白话不应重复")
+        for p in self.chart["palaces"]:
+            self.assertLessEqual(len(p["plain"]), 8, f"{p['name']}:{p['plain']}")
+
+    def test_palace_plain_matches_shared_table(self):
+        """排盘层与解读层共用同一份 PALACE_PLAIN，不允许两处各写一套。"""
+        for p in self.chart["palaces"]:
+            self.assertEqual(p["plain"], PALACE_PLAIN[p["name"]])
+
+    # ---------------------------------------------------------- 解读段
+    def test_every_section_carries_plain_lead(self):
+        blocks = [
+            self.reading["love"],
+            self.reading["career"],
+            self.reading["career"]["wealth"],
+            self.reading["fortune"],
+            self.reading["fortune"]["da_xian"],
+        ]
+        for block in blocks:
+            label = block.get("title") or block["palace"]
+            self.assertTrue(block["plain"], label)
+            self.assertIn("这一块", block["plain"], label)
+
+    def test_da_xian_plain_explains_the_term(self):
+        plain = self.reading["fortune"]["da_xian"]["plain"]
+        self.assertIn("十年", plain)
+        self.assertIn(self.reading["fortune"]["da_xian"]["palace"], plain)
+
+    def test_headline_plain_uses_plain_star_tags(self):
+        """一句话命格的白话版不能只罗列星名，要带性格标签。"""
+        plain = self.reading["headline_plain"]
+        self.assertTrue(plain)
+        # 事业宫主星必然被写进白话版（命宫主星可能为空宫，借对宫，不作硬断言）
+        for star in self.reading["career"]["stars"]:
+            if star in STAR_PLAIN:
+                self.assertIn(STAR_PLAIN[star], plain, star)
+        self.assertTrue(
+            any(tag in plain for tag in STAR_PLAIN.values()),
+            "白话版里应至少带一个星曜性格标签",
+        )
+
+    def test_empty_palace_lead_explains_borrowing(self):
+        """空宫的第一条要说明「为什么这里讲的是别的星」。"""
+        chart = build_ziwei(2000, 1, 1, 0, 10, "男", 120.0)
+        reading = build_ziwei_reading(chart)
+        checked = 0
+        for key in ("love", "career", "fortune"):
+            block = reading[key]
+            if not block["borrowed"]:
+                continue
+            checked += 1
+            lead = block["points"][0]
+            self.assertIn("空宫", lead, key)
+            self.assertIn("正对面", lead, key)
+        self.assertTrue(checked, "该命盘应至少有一段是空宫借对宫")
+
+    # ---------------------------------------------------------- 四化 / 流年
+    def test_si_hua_points_explain_the_term(self):
+        """凡出现「化禄 / 化权 / 化科 / 化忌」，同一条里必须给出白话解释。"""
+        joined = []
+        for key in ("love", "career", "fortune"):
+            joined.extend(self.reading[key]["points"])
+        joined.extend(self.reading["career"]["wealth"]["points"])
+        seen = 0
+        for text in joined:
+            for hua, keyword in self.HUA_KEYWORD.items():
+                if hua in text:
+                    seen += 1
+                    self.assertIn(keyword, text, text)
+        self.assertTrue(seen, "该命盘应至少命中一条四化")
+
+    def test_year_points_and_plain_are_self_explanatory(self):
+        for item in self.years:
+            self.assertTrue(item["plain"], item["year"])
+            self.assertIn("太岁", item["points"][0])
+            self.assertIn("当年当值", item["points"][0])
+            # 太岁宫的大白话要出现在第一条里，用户不需要自己回去查宫名
+            self.assertIn(item["tai_sui"]["topic"], item["points"][0])
+            for text in item["points"]:
+                for hua, keyword in self.HUA_KEYWORD.items():
+                    if hua in text:
+                        self.assertIn(keyword, text, text)
+
+
 try:
     from fastapi.testclient import TestClient
 except ImportError:  # pragma: no cover
@@ -313,12 +461,24 @@ class ZiweiApiTest(unittest.TestCase):
         self.assertEqual(data["palaces"][0]["name"], "命宫")
         self.assertTrue(data["basic"]["ju"].endswith("局"))
 
+        # 白话层必须穿过 schema 原样到达客户端（字段被漏掉就等于回退成黑话）
+        self.assertTrue(data["basic"]["plain"])
+        self.assertTrue(all(p["plain"] for p in data["palaces"]))
+
         reading = data["reading"]
         for key in ("love", "career", "fortune"):
             self.assertTrue(reading[key]["summary"], key)
             self.assertTrue(reading[key]["points"], key)
+            self.assertTrue(reading[key]["plain"], key)
+        self.assertTrue(reading["headline_plain"])
+        self.assertTrue(reading["guide"])
         self.assertTrue(reading["career"]["wealth"]["points"])
+        self.assertTrue(reading["career"]["wealth"]["plain"])
+        self.assertTrue(reading["career"]["wealth"]["title"])
         self.assertIn("岁", reading["fortune"]["da_xian"]["range"])
+        self.assertTrue(reading["fortune"]["da_xian"]["plain"])
+
+        self.assertTrue(data["years"][0]["plain"])
 
     def test_longitude_is_required(self):
         """经度决定真太阳时，缺了不能排盘。"""

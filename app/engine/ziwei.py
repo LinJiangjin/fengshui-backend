@@ -51,7 +51,7 @@ else:
 from .bazi import hour_branch_of, na_yin_of, true_solar_time
 from .constants import EARTHLY_BRANCHES, HEAVENLY_STEMS, STEM_YIN_YANG
 
-__all__ = ["build_ziwei", "ZIWEI_PALACES"]
+__all__ = ["build_ziwei", "ZIWEI_PALACES", "PALACE_PLAIN"]
 
 # 地支序号：子 0 … 亥 11
 BRANCHES = EARTHLY_BRANCHES
@@ -61,6 +61,24 @@ ZIWEI_PALACES = [
     "命宫", "兄弟", "夫妻", "子女", "财帛", "疾厄",
     "迁移", "交友", "官禄", "田宅", "福德", "父母",
 ]
+
+# 十二宫大白话：这一宫在生活里到底管什么。
+# 解读层（ziwei_reading / ziwei_year）与本模块共用同一份口径，避免多处维护。
+# 文案长度刻意压到 7 字以内，前端九宫 / 宫位卡片里一行放得下。
+PALACE_PLAIN = {
+    "命宫": "性格与整体状态",
+    "兄弟": "同辈与合伙往来",
+    "夫妻": "感情与亲密关系",
+    "子女": "子女与创作产出",
+    "财帛": "收入方式与理财",
+    "疾厄": "身体状态与作息",
+    "迁移": "外出与环境机会",
+    "交友": "人脉与同事下属",
+    "官禄": "事业与职场发展",
+    "田宅": "家庭与不动产",
+    "福德": "内心与精神生活",
+    "父母": "长辈与上级文书",
+}
 
 # 五虎遁：年干 -> 寅宫天干（甲己之岁丙作首……）
 WU_HU_DUN = {
@@ -278,6 +296,7 @@ def build_ziwei(
         palaces.append(
             {
                 "name": palace_name,
+                "plain": PALACE_PLAIN[palace_name],
                 "zhi": zhi,
                 "gan": gan,
                 "pillar": gan + zhi,
@@ -317,6 +336,29 @@ def build_ziwei(
         "opposite": palaces[6],
     }
 
+    # 11) 基本信息的**白话版**：把「命宫丁丑 · 身宫官禄 · 水二局 · 紫微在子」
+    #     这句行话翻译成第一次看盘的人也能读懂的一段话（前端直接展示）。
+    shen_palace_name = next(
+        (p["name"] for p in palaces if p["is_shen"]), "命宫"
+    )
+    ming_main = palaces[0]["main"]
+    if ming_main:
+        ming_clause = f"命宫这一宫坐守的是主星「{'、'.join(ming_main)}」"
+    else:
+        ming_clause = (
+            "命宫这一宫没有主星（术语叫「空宫」），"
+            "性格特征要参看它正对面的「迁移」宫"
+        )
+    basic_plain = (
+        f"命宫落在「{ming_gan}{ming_zhi}」这个位置——命宫是整张盘的核心，"
+        f"代表你的性格底色，{ming_clause}。"
+        f"身宫落在「{shen_palace_name}」宫（{PALACE_PLAIN[shen_palace_name]}），"
+        f"代表你后半生会把重心放在这一块。"
+        f"{ju_name}相当于排盘的「计时器」：由命宫干支的纳音推出来，"
+        f"决定你 {ju_number} 岁起运、大限怎么排，本身不论吉凶。"
+        f"紫微星（十四主星里的「帝星」，全盘主轴）落在「{BRANCHES[ziwei_index]}」。"
+    )
+
     return {
         "birth": {
             "name": name,
@@ -336,13 +378,12 @@ def build_ziwei(
             "ming_zhi": ming_zhi,
             "ming_pillar": ming_gan + ming_zhi,
             "shen_zhi": BRANCHES[shen_index],
-            "shen_palace": next(
-                (p["name"] for p in palaces if p["is_shen"]), "命宫"
-            ),
+            "shen_palace": shen_palace_name,
             "ju": ju_name,
             "ju_number": ju_number,
             "ziwei_zhi": BRANCHES[ziwei_index],
             "da_xian_forward": forward,
+            "plain": basic_plain,
         },
         "palaces": palaces,
         "da_xian": {

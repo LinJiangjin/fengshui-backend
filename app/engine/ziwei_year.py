@@ -23,7 +23,7 @@ import datetime as _dt
 from typing import Any
 
 from .constants import EARTHLY_BRANCHES, HEAVENLY_STEMS
-from .ziwei import SI_HUA, ZIWEI_PALACES
+from .ziwei import PALACE_PLAIN, SI_HUA, ZIWEI_PALACES
 
 __all__ = ["build_ziwei_years", "gan_zhi_of_year"]
 
@@ -35,13 +35,13 @@ TAI_SUI_STARS = [
 
 # 文案一律中性：只说「宜注意 / 宜留白 / 宜提前」，不做事件断言
 TAI_SUI_TEXT = {
-    "岁建": "太岁当头，此宫事务被放大，一举一动更受关注。",
+    "岁建": "它就是今年太岁所在的那一宫，相关的事会被放大，一举一动更受关注。",
     "晦气": "易有闷滞感，做事别急，沟通上多一分耐心。",
     "丧门": "情绪易低落，重大决定宜缓，多与亲近的人相处。",
-    "贯索": "易有牵绊与被卡住的感觉，合约、款项宜提前理清。",
-    "官符": "文书、规章、与官方打交道的事增多，务必留痕。",
+    "贯索": "易有牵绊、被卡住的感觉，合约与款项宜提前理清。",
+    "官符": "与文书、规章、官方打交道的事增多，务必留痕。",
     "小耗": "易有小额或预算外支出，宜提前预留余地。",
-    "大耗": "岁破之位，宜守不宜攻，重大投入放慢一步。",
+    "大耗": "这是「岁破」的位置（正对着太岁），宜守不宜攻，重大投入放慢一步。",
     "龙德": "贵人运强，遇事有人搭手，适合主动争取。",
     "白虎": "宜防磕碰与突发状况，行车运动多留意，作息保持规律。",
     "天德": "有化解之力，适合修复关系、了结旧账。",
@@ -59,27 +59,17 @@ PALACE_FIELD = {
     "官禄": "事业", "田宅": "家庭", "福德": "内心", "父母": "长辈",
 }
 
-# 宫位 -> 一句话含义
-PALACE_TOPIC = {
-    "命宫": "整体状态与自我定位",
-    "兄弟": "同辈、合伙与资金往来",
-    "夫妻": "感情与亲密关系",
-    "子女": "子女、创作与产出",
-    "财帛": "收入方式与理财",
-    "疾厄": "身体与作息",
-    "迁移": "外出、环境与外部机会",
-    "交友": "人脉、同事与下属",
-    "官禄": "事业与职场发展",
-    "田宅": "家庭与居住、不动产",
-    "福德": "内心状态与精神生活",
-    "父母": "长辈、文书与上级关系",
-}
+# 宫位白话（「这一宫管什么」）与排盘层共用同一份 PALACE_PLAIN，不在这里另建一份
 
 YEAR_SI_HUA_TEXT = {
-    "化禄": "{star}化禄入{palace}：这一年此处有资源与机会，值得投入。",
-    "化权": "{star}化权入{palace}：此处需要你主导，主动推进比等待有效。",
-    "化科": "{star}化科入{palace}：名声与贵人加分，遇到阻力容易有人解围。",
-    "化忌": "{star}化忌入{palace}：此处是今年的关口，宜稳不宜冒进，先把风险兜住。",
+    "化禄": "{star}星今年「化禄」——「禄」代表机会与资源——落到{palace}："
+            "这一年这一块值得主动投入。",
+    "化权": "{star}星今年「化权」——「权」代表主导与掌控——落到{palace}："
+            "这一年这一块得你自己拿主意推，主动比等待有效。",
+    "化科": "{star}星今年「化科」——「科」代表名声与贵人——落到{palace}："
+            "这一年这一块更容易被认可，卡住时有人出面。",
+    "化忌": "{star}星今年「化忌」——「忌」代表反复与牵挂——落到{palace}："
+            "这一年这一块是关口，宜稳不宜冒进，先把风险兜住。",
 }
 
 
@@ -161,10 +151,11 @@ def build_ziwei_years(
             for name in KEY_TAI_SUI
         ]
 
-        # 5) 组织文案
+        # 5) 组织文案（一律先给白话解释，再给结论）
         points = [
-            f"{year} {gan_zhi}年：太岁落在{tai_palace['name']}，"
-            f"全年事务围绕「{PALACE_TOPIC.get(tai_palace['name'], tai_palace['name'])}」展开。",
+            f"{year} {gan_zhi}年：这一年的「太岁」落在{tai_palace['name']}宫——"
+            f"太岁就是当年当值的那一宫，代表今年事情最集中的地方，"
+            f"也就是「{PALACE_PLAIN.get(tai_palace['name'], tai_palace['name'])}」。",
         ]
         for item in si_hua:
             if item["hua"] in YEAR_SI_HUA_TEXT:
@@ -175,7 +166,8 @@ def build_ziwei_years(
                 )
         for item in key_stars:
             points.append(
-                f"{item['star']}在{item['palace']}：{TAI_SUI_TEXT[item['star']]}"
+                f"{item['star']}星落在{item['palace']}宫："
+                f"{TAI_SUI_TEXT[item['star']]}"
             )
 
         # 6) 重点领域：太岁宫为主，叠加化禄 / 化忌所在宫
@@ -215,13 +207,22 @@ def build_ziwei_years(
                 "tai_sui": {
                     "palace": tai_palace["name"],
                     "zhi": zhi,
-                    "topic": PALACE_TOPIC.get(tai_palace["name"], ""),
+                    "topic": PALACE_PLAIN.get(tai_palace["name"], ""),
                 },
                 "po": {"palace": po_palace["name"], "zhi": po_palace["zhi"]},
                 "si_hua": si_hua,
                 "stars": key_stars,
                 "focus": focus,
                 "stance": stance,
+                # 白话导语：把「年龄 / 大限 / 太岁」三个数字与宫名翻译成一句话
+                "plain": (
+                    f"你这一年 {age} 周岁，正走"
+                    f"「{da_xian_palace['name']}」宫当值的这十年"
+                    f"（{da_xian_palace['da_xian']['from']}-"
+                    f"{da_xian_palace['da_xian']['to']} 岁）；"
+                    f"今年事情最集中在「{PALACE_PLAIN.get(tai_name, tai_name)}」上，"
+                    f"整体{stance}。"
+                ),
                 "points": points,
             }
         )

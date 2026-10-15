@@ -10,17 +10,103 @@
 * 感情 —— 以**夫妻宫**为主（空宫则借对宫），看主星 + 吉煞 + 四化。
 * 职业 —— 以**官禄宫**定方向、**财帛宫**定求财方式。
 * 运势 —— 以**命宫**定基调，再叠上**当前大限**（十年一运）给出阶段提示。
+
+面向用户的写法
+---------------
+紫微斗数的行话（命宫 / 身宫 / 四化 / 空宫 / 大限 / 太岁…）对外行来说门槛很高，
+所以本层额外输出三类**白话**字段，前端原样展示：
+
+* ``guide``          —— 「怎么看这张盘」术语白话对照（静态，与命盘无关）。
+* ``headline_plain`` —— 一句话命格的大白话版。
+* 每段解读的 ``plain`` —— 这一段「看的是什么、依据哪一宫」。
+
+另外，条文本身也尽量避免只甩术语：四化、吉煞星这类词一律**先给白话解释
+再给结论**，空宫则明确说明「借正对面那宫来看」，不留未解释的名词。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .ziwei import AUSPICIOUS, MALIFIC, ZIWEI_PALACES
+from .ziwei import AUSPICIOUS, MALIFIC, PALACE_PLAIN, ZIWEI_PALACES
 
 __all__ = ["build_ziwei_reading"]
 
 PALACE_INDEX = {name: i for i, name in enumerate(ZIWEI_PALACES)}
+
+# ------------------------------------------------------- 怎么看这张盘（术语白话）
+# 静态内容：与具体命盘无关，因此不走「星曜 -> 文案」映射，但仍由后端下发，
+# 保证 App 端一份口径、可随 RULES_VERSION 一起改版。
+GLOSSARY_INTRO = (
+    '下面这些词是本页会反复用到的行话，先扫一眼，再看解读会顺很多。'
+    '所有条文都是「星曜落宫」的确定性推演，不预测具体事件。'
+)
+
+GLOSSARY: list[tuple[str, str]] = [
+    ("命宫", "整张盘的核心，代表你的性格底色与人生主基调。"),
+    ("身宫", "后天发力点，看得越往后越明显，代表你后半生的重心落在哪一块。"),
+    ("主星", "十四颗主角星。它落在哪一宫，那一块事务就带上它的性格。"),
+    (
+        "空宫",
+        "这一宫没有主星。传统做法是借它正对面那一宫的主星来看，"
+        "不代表「缺」或「不好」。",
+    ),
+    (
+        "四化",
+        "同一颗星在不同年份会带上四种状态：化禄=机会与资源，化权=主导与掌控，"
+        "化科=名声与贵人，化忌=反复与牵挂、最需要用心经营的地方。",
+    ),
+    ("大限", "十年一步的大运。每十年换一宫当值，决定这十年的主旋律。"),
+    (
+        "流年 · 太岁",
+        "「流年」就是当年；「太岁」指当年当值的宫，也就是这一年事情最集中的地方。",
+    ),
+    (
+        "三方四正",
+        "本宫 + 正对面 + 左右各隔三格的两个宫，四个宫合起来一起看。"
+        "本页的解读已按这个口径综合过。",
+    ),
+    (
+        "吉星 · 煞星",
+        "吉星（左辅右弼、文昌文曲、天魁天钺、禄存）是帮手；"
+        "煞星（擎羊陀罗、地空地劫）是过程中的坎。",
+    ),
+    (
+        "五行局",
+        "由命宫干支的纳音推出，决定你的命盘怎么排（尤其紫微星落在哪）"
+        "以及几岁起运。它只是一个「计时器」，本身不论吉凶。",
+    ),
+]
+
+# 每一段解读「看的是什么、依据哪一宫」——放在标题下面当导语
+SECTION_PLAIN = {
+    "love": "这一块看的是：你想找什么样的伴侣、你们相处时最容易卡在哪里。"
+            "依据是「夫妻宫」——管感情与亲密关系的那一宫。",
+    "career": "这一块看的是：你适合什么样的工作方式与行业方向。"
+              "依据是「官禄宫」——管事业与职场的那一宫。",
+    "wealth": "这一块看的是：你的钱主要靠什么方式进来、容易在哪里漏掉。"
+              "依据是「财帛宫」——管收入与理财的那一宫。",
+    "fortune": "这一块看的是：你这一生的整体节奏与主要课题。"
+               "依据是「命宫」——整张盘最核心的那一宫。",
+}
+
+# 十四主星的**大白话短标签**，用于 headline_plain 这类「一句话说人话」的场合
+STAR_PLAIN = {
+    "紫微": "有主见、讲格局、能扛事",
+    "天机": "脑子快、点子多、爱折腾",
+    "太阳": "热心外放、爱出头、肯付出",
+    "武曲": "务实、执行力强、说话直",
+    "天同": "随和、重舒适、人缘好",
+    "廉贞": "外冷内热、要求高、认死理",
+    "天府": "稳重、会攒钱、不爱冒险",
+    "太阴": "细腻、有审美、偏幕后",
+    "贪狼": "多才多艺、爱交际、好奇心重",
+    "巨门": "爱钻研、能说会道、易招口舌",
+    "天相": "周到、讲公平、善协调",
+    "天梁": "稳重、有原则、爱照顾人",
+    "七杀": "果断、能扛事、起伏大",
+    "破军": "敢闯敢变、爱推倒重来",
+}
 
 # ---------------------------------------------------------------- 星性总纲
 STAR_TRAIT = {
@@ -130,15 +216,22 @@ DA_XIAN_TEXT = {
     "破军": "这十年会有一次明显的推倒重来；主动转型比被动接受要好得多。",
 }
 
+# 四化：先给「禄权科忌」的白话解释，再给结论——不甩术语
 SI_HUA_TEXT = {
-    "化禄": "{star}化禄：资源与人缘向这里汇聚，投入产出比高，宜主动争取。",
-    "化权": "{star}化权：掌控力增强、容易主导局面，但别把强势当效率。",
-    "化科": "{star}化科：名声与贵人加分，遇阻时容易有人出手解围。",
-    "化忌": "{star}化忌：此处最易耗神，是你这十年要重点经营与放下的地方。",
+    "化禄": "{star}星在「{palace}」化禄——「禄」代表机会与资源："
+            "这一块资源和人缘会向你汇聚，投入产出比高，值得主动争取。",
+    "化权": "{star}星在「{palace}」化权——「权」代表主导与掌控："
+            "这一块你说话更管用，宜自己拿主意推进；但别把强势当效率。",
+    "化科": "{star}星在「{palace}」化科——「科」代表名声与贵人："
+            "这一块容易得到认可，卡住时往往有人出面解围。",
+    "化忌": "{star}星在「{palace}」化忌——「忌」代表反复与牵挂："
+            "这一块最耗你的神，是这一程要重点经营、也要学着放下的地方。",
 }
 
-GOOD_TEXT = "吉星同宫（{stars}）：助力明显，关键时刻容易有人拉一把。"
-BAD_TEXT = "煞星同宫（{stars}）：过程易有波折与反复，宜留缓冲，避免硬碰硬。"
+GOOD_TEXT = "同一宫还有吉星「{stars}」（帮手星）：等于多了助力，关键时候容易有人拉你一把。"
+BAD_TEXT = "同一宫还有煞星「{stars}」（绊脚星）：过程容易有磕绊和反复，遇事留点缓冲，别硬碰硬。"
+EMPTY_LEAD = "本宫没有主星（术语叫「空宫」），传统做法是借正对面那宫{who}来看。"
+NO_STAR_FALLBACK = "此宫星曜组合特殊，宜结合整盘参看。"
 
 
 def _palace(chart: dict[str, Any], name: str) -> dict[str, Any]:
@@ -172,7 +265,7 @@ def _aux_notes(palace: dict[str, Any]) -> list[str]:
 
 def _si_hua_notes(palace: dict[str, Any]) -> list[str]:
     return [
-        SI_HUA_TEXT[item["hua"]].format(star=item["star"])
+        SI_HUA_TEXT[item["hua"]].format(star=item["star"], palace=palace["name"])
         for item in palace["si_hua"]
         if item["hua"] in SI_HUA_TEXT
     ]
@@ -183,39 +276,70 @@ def _section(
     palace_name: str,
     title: str,
     table: dict[str, str],
+    plain: str,
 ) -> dict[str, Any]:
-    """把某宫的主星 + 辅星 + 四化翻译成一段解读。"""
+    """把某宫的主星 + 辅星 + 四化翻译成一段解读。
+
+    ``plain`` 是「这一块看的是什么、依据哪一宫」的白话导语，随段返回给前端。
+    """
     palace = _palace(chart, palace_name)
     main, borrowed = _main_stars(chart, palace_name)
 
     points = [table[s] for s in main if s in table]
-    if borrowed and points:
-        points[0] = f"本宫无主星（空宫），特质参照对宫「{main[0]}」：{points[0]}"
     points.extend(_si_hua_notes(palace))
     points.extend(_aux_notes(palace))
 
     if not points:  # pragma: no cover - 兜底：不出现空区块
-        points = [STAR_TRAIT.get(main[0], "此宫星曜组合特殊，宜结合整盘参看。")
-                  if main else "此宫星曜组合特殊，宜结合整盘参看。"]
+        points = [STAR_TRAIT.get(main[0], NO_STAR_FALLBACK)
+                  if main else NO_STAR_FALLBACK]
+
+    # 空宫（本宫无主星）时把「为什么这里讲的是别的星」说清楚，放在最前面
+    summary = points[0]
+    if borrowed:
+        who = f"主星「{'、'.join(main)}」" if main else "的主星"
+        points.insert(0, EMPTY_LEAD.format(who=who))
 
     return {
         "title": title,
         "palace": palace_name,
         "zhi": palace["zhi"],
         "gan": palace["gan"],
+        "plain": plain,
         "stars": main,
         "borrowed": borrowed,
-        "summary": points[0],
+        "summary": summary,
         "points": points,
     }
 
 
+def _star_desc(stars: list[str]) -> str:
+    """把星曜列表翻译成「大白话标签」串，如「天同（随和、重舒适）、巨门（能说会道）」。"""
+    return "、".join(
+        f"{s}（{STAR_PLAIN[s]}）" if s in STAR_PLAIN else s for s in stars
+    )
+
+
+def _headline_plain(chart: dict[str, Any]) -> str:
+    """一句话命格的大白话版：性格底色 + 事业路子。"""
+    ming_stars, borrowed = _main_stars(chart, "命宫")
+    career_stars = _main_stars(chart, "官禄")[0]
+
+    if ming_stars:
+        lead = "借正对面那宫的主星来看，" if borrowed else ""
+        text = f"{lead}你的性格底色是{_star_desc(ming_stars)}"
+    else:  # pragma: no cover - 命宫与对宫同时空宫的极端情形
+        text = "命宫与对宫都没有主星，性格底色要结合整盘来看"
+    if career_stars:
+        text += f"；事业上走的是{_star_desc(career_stars)}的路子"
+    return text + "。"
+
+
 def build_ziwei_reading(chart: dict[str, Any]) -> dict[str, Any]:
     """把紫微命盘翻译成「感情 / 职业 / 运势」三块结论。"""
-    love = _section(chart, "夫妻", "感情 · 夫妻宫", LOVE_TEXT)
-    career = _section(chart, "官禄", "职业 · 官禄宫", CAREER_TEXT)
-    wealth = _section(chart, "财帛", "财运 · 财帛宫", WEALTH_TEXT)
-    fortune = _section(chart, "命宫", "运势基调 · 命宫", FORTUNE_TEXT)
+    love = _section(chart, "夫妻", "感情 · 夫妻宫", LOVE_TEXT, SECTION_PLAIN["love"])
+    career = _section(chart, "官禄", "职业 · 官禄宫", CAREER_TEXT, SECTION_PLAIN["career"])
+    wealth = _section(chart, "财帛", "财运 · 财帛宫", WEALTH_TEXT, SECTION_PLAIN["wealth"])
+    fortune = _section(chart, "命宫", "运势基调 · 命宫", FORTUNE_TEXT, SECTION_PLAIN["fortune"])
 
     # 当前大限（十年一运）
     da_xian = chart["da_xian"]
@@ -223,7 +347,10 @@ def build_ziwei_reading(chart: dict[str, Any]) -> dict[str, Any]:
     dx_palace_name = da_xian["palace"]
     dx_points = [DA_XIAN_TEXT[s] for s in dx_stars if s in DA_XIAN_TEXT]
     if not dx_points:
-        dx_points = ["本步大限宫无主星，宜看对宫与四化综合判断。"]
+        dx_points = [
+            "这一步大限当值的宫没有主星（术语叫「空宫」），"
+            "按传统借它的对宫来看，再结合四化（禄权科忌）综合判断。"
+        ]
     dx = {
         "title": "当前大限 · 十年运",
         "age": da_xian["age"],
@@ -231,6 +358,12 @@ def build_ziwei_reading(chart: dict[str, Any]) -> dict[str, Any]:
         "palace": dx_palace_name,
         "zhi": da_xian["zhi"],
         "stars": dx_stars,
+        "plain": (
+            f"「大限」是十年一步的大运。你今年 {da_xian['age']} 岁，正处在 "
+            f"{da_xian['from']}-{da_xian['to']} 岁这一步，当值的是"
+            f"「{dx_palace_name}」宫（{PALACE_PLAIN[dx_palace_name]}），"
+            f"所以这十年的主旋律落在这一块。"
+        ),
         "summary": dx_points[0],
         "points": dx_points,
     }
@@ -244,8 +377,11 @@ def build_ziwei_reading(chart: dict[str, Any]) -> dict[str, Any]:
         headline = f"{'、'.join(ming_main)}坐命，事业宫见{'、'.join(san_fang['career']['main']) or '空宫'}"
 
     career["wealth"] = {
+        # 前端把财帛宫渲染成职业区块下的小块，此前缺 title 会渲染出空白标题
+        "title": "财运 · 财帛宫",
         "palace": wealth["palace"],
         "zhi": wealth["zhi"],
+        "plain": wealth["plain"],
         "stars": wealth["stars"],
         "points": wealth["points"],
     }
@@ -253,6 +389,9 @@ def build_ziwei_reading(chart: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "headline": headline,
+        "headline_plain": _headline_plain(chart),
+        "guide_intro": GLOSSARY_INTRO,
+        "guide": [{"term": term, "plain": text} for term, text in GLOSSARY],
         "love": love,
         "career": career,
         "fortune": fortune,

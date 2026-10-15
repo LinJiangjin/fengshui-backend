@@ -517,6 +517,7 @@ class ZiweiPalace(BaseModel):
     """紫微十二宫之一：宫名、宫位干支与星曜。"""
 
     name: str = ""
+    plain: str = Field("", description="这一宫管什么的大白话，如「感情与亲密关系」")
     zhi: str = ""
     gan: str = ""
     pillar: str = ""
