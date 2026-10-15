@@ -20,7 +20,7 @@
     关闭热重载（生产环境建议）。
 
 .PARAMETER WaitSeconds
-    等待端口释放与 /health 就绪的最长秒数，默认各 20 秒。
+    等待端口释放与 /health 就绪的最长秒数，默认各 30 秒。
 
 .EXAMPLE
     .\scripts\restart.ps1
@@ -33,7 +33,7 @@ param(
     # 不能用 $Host：那是 PowerShell 只读的自动变量
     [string]$BindHost = '0.0.0.0',
     [switch]$NoReload,
-    [int]$WaitSeconds = 20
+    [int]$WaitSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,6 +85,18 @@ if (Test-PortListening -Port $Port) {
 Write-Step "port $Port is free"
 
 # ------------------------------------------------- 3. 启动（新窗口，不阻塞）
+# 输出落到日志文件：偶发启动失败时才有现场可查，而不是只看到一句健康检查超时。
+$LogDir = Join-Path $ServerDir 'logs'
+if (-not (Test-Path -LiteralPath $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
+$outLog = Join-Path $LogDir 'uvicorn.out.log'
+$errLog = Join-Path $LogDir 'uvicorn.err.log'
+
+# 输出被重定向到文件时 Python 会启用块缓冲，进程若崩溃则日志可能还没落盘。
+# 关掉缓冲，保证失败时能看到最后几行。
+$env:PYTHONUNBUFFERED = '1'
+
 $reloadArg = if ($NoReload) { @() } else { @('--reload') }
 $argList = @(
     '-m', 'uvicorn', 'main:app',
@@ -92,16 +104,25 @@ $argList = @(
 ) + $reloadArg
 
 Write-Step "starting: python $($argList -join ' ')"
-Start-Process -FilePath 'python' `
+$proc = Start-Process -FilePath 'python' `
     -ArgumentList $argList `
     -WorkingDirectory $ServerDir `
-    -WindowStyle Minimized
+    -WindowStyle Minimized `
+    -RedirectStandardOutput $outLog `
+    -RedirectStandardError $errLog `
+    -PassThru
 
 # ------------------------------------------------- 4. 健康检查
 $healthUrl = "http://127.0.0.1:$Port/health"
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
 $deadline = (Get-Date).AddSeconds($WaitSeconds)
 $ok = $false
 while ((Get-Date) -lt $deadline) {
+    $proc.Refresh()
+    # 进程已退出且还没通过探活，说明启动阶段就崩了，没必要继续等
+    if ($proc.HasExited) {
+        break
+    }
     try {
         $resp = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 3
         if ($resp.status -eq 'ok' -or $resp.status -eq 'degraded') {
@@ -115,8 +136,19 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (-not $ok) {
-    throw "server did not become healthy within ${WaitSeconds}s: $healthUrl"
+    Write-Host "[restart] startup failed after $($sw.Elapsed.TotalSeconds.ToString('N1'))s" -ForegroundColor Red
+    if ($proc.HasExited) {
+        Write-Host "[restart] process exited with code $($proc.ExitCode)" -ForegroundColor Red
+    }
+    # 日志里含数据库连接串等敏感信息，只打最后几行，够定位即可
+    foreach ($f in @($outLog, $errLog)) {
+        if (Test-Path -LiteralPath $f) {
+            Write-Host "[restart] --- tail $f ---" -ForegroundColor Yellow
+            Get-Content -LiteralPath $f -Tail 15 -ErrorAction SilentlyContinue
+        }
+    }
+    throw "server did not become healthy: $healthUrl"
 }
 
-Write-Host "[restart] server is up" -ForegroundColor Green
+Write-Host "[restart] server is up in $($sw.Elapsed.TotalSeconds.ToString('N1'))s" -ForegroundColor Green
 $resp | ConvertTo-Json -Depth 5

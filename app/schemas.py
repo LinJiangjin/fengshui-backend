@@ -969,3 +969,221 @@ class AlmanacCalendar(BaseModel):
     days: list[AlmanacCalendarDay] = Field(default_factory=list)
     best: Optional[AlmanacCalendarDay] = None
     rules_version: str = ""
+
+
+# ---------------------------------------------------------------- 玄空飞星 · 进阶
+class XuankongStack(BaseModel):
+    """月星与流年星同宫的复合结论。"""
+
+    key: str = Field("", description="叠吉 / 小吉 / 参半 / 叠凶 / 重凶 / 五黄同宫 / 双五黄")
+    level: str = Field("", description="旺 / 平 / 煞 / 大凶")
+    note: str = ""
+
+
+class XuankongMonthPalace(BaseModel):
+    """玄空月盘的一宫：月星叠流年星。"""
+
+    luoshu: int = Field(0, ge=0, le=9, description="洛书数，5 为中宫")
+    key: str = Field("", description="方位，与前端九宫格映射键一致")
+    trigram: str = ""
+    direction: str = ""
+    star: int = Field(0, ge=0, le=9, description="月星入中后飞临本宫之星")
+    star_name: str = Field("", description="如「八白」")
+    element: str = ""
+    level: str = Field("", description="旺 / 平 / 煞 / 大凶")
+    label: str = ""
+    note: str = ""
+    is_center: bool = False
+    year_star: int = Field(0, ge=0, le=9, description="同宫流年星")
+    year_star_name: str = ""
+    year_star_level: str = ""
+    stacked: bool = Field(
+        False, description="月星与流年星同数同宫（两盘皆顺飞，故这要求入中之数相同）"
+    )
+    stack: XuankongStack
+
+
+class XuankongExtreme(BaseModel):
+    """月盘的最旺宫 / 最凶宫。"""
+
+    direction: str = ""
+    trigram: str = ""
+    star: int = Field(0, ge=0, le=9, description="该宫月星之数")
+    star_name: str = ""
+    label: str = ""
+    level: str = ""
+    note: str = ""
+    title: str = ""
+
+
+class XuankongMonth(BaseModel):
+    """玄空月盘：按节气月起飞星，并与流年盘叠看。"""
+
+    date: str = ""
+    year: int = 0
+    branch: str = Field("", description="立春分界后的年支")
+    month_index: int = Field(0, ge=0, le=12, description="节气月序，1 起")
+    month_name: str = Field("", description="如「九月」")
+    jieqi: str = Field("", description="本月的「节」，如「寒露」")
+    jieqi_mnemonic: str = ""
+    center_star: int = Field(0, ge=0, le=9, description="月星入中之数")
+    center_star_name: str = ""
+    year_center_star: int = Field(0, ge=0, le=9, description="流年星入中之数")
+    year_center_star_name: str = ""
+    palaces: list[XuankongMonthPalace] = Field(default_factory=list)
+    best: XuankongExtreme
+    worst: XuankongExtreme
+    key_points: list[str] = Field(default_factory=list)
+    rules_version: str = ""
+
+
+class XuankongStarState(BaseModel):
+    """某星在当运下的旺衰（玄空论吉凶看的是与当运的关系）。"""
+
+    state: str = Field("", description="旺 / 生 / 退 / 死 / 煞")
+    level: str = Field("", description="旺 / 平 / 煞 / 大凶")
+    note: str = ""
+    delta: int = Field(0, ge=0, le=8, description="该星距当运星的偏移")
+    is_wang: bool = Field(False, description="是否为当运旺星")
+
+
+class XuankongHousePalace(BaseModel):
+    """宅运盘的一宫：山星 / 运星 / 向星三盘叠加。"""
+
+    luoshu: int = Field(0, ge=0, le=9)
+    key: str = ""
+    trigram: str = ""
+    direction: str = ""
+    is_center: bool = False
+    shan_star: int = Field(0, ge=0, le=9, description="山星（管人丁健康）")
+    shan_star_name: str = ""
+    yun_star: int = Field(0, ge=0, le=9, description="运星（主该宫时运）")
+    yun_star_name: str = ""
+    xiang_star: int = Field(0, ge=0, le=9, description="向星（管财禄事业）")
+    xiang_star_name: str = ""
+    shan_state: XuankongStarState
+    xiang_state: XuankongStarState
+    yun_state: XuankongStarState
+    level: str = Field("", description="本宫综合吉凶，复用四档值域")
+    role: str = Field("", description="本宫宜作何用")
+    has_lost_wuhuang: bool = Field(False, description="本宫有失运五黄")
+    is_sit: bool = Field(False, description="是否为坐山宫")
+    is_face: bool = Field(False, description="是否为向首宫")
+
+
+class XuankongSide(BaseModel):
+    """坐山 / 向首。"""
+
+    mountain: str = Field("", description="山名，如「子」")
+    trigram: str = ""
+    direction: str = ""
+    luoshu: int = Field(0, ge=0, le=9)
+    dragon: str = Field("", description="三元龙：天元 / 地元 / 人元")
+    yin_yang: str = Field("", description="阴 / 阳")
+    degree: Optional[float] = None
+    offset: Optional[float] = Field(
+        None, description="偏离该山中心线的角度，用于兼向提示"
+    )
+    label: str = Field("", description="如「子（天元龙 · 阴）」")
+
+
+class XuankongYun(BaseModel):
+    """三元九运。"""
+
+    number: int = Field(0, ge=0, le=9)
+    name: str = Field("", description="如「九运」")
+    yuan: str = Field("", description="上元 / 中元 / 下元")
+    element: str = ""
+    star: int = Field(0, ge=0, le=9, description="当运星，即旺星")
+    star_name: str = ""
+    start_year: int = 0
+    end_year: int = 0
+    source: str = Field("", description="year / build_year / explicit")
+    label: str = ""
+    summary: str = ""
+
+
+class XuankongCenter(BaseModel):
+    """中宫：山星、向星的入中之数及顺逆判据。"""
+
+    shan_star: int = Field(0, ge=0, le=9, description="山星入中之数")
+    shan_forward: bool = False
+    xiang_star: int = Field(0, ge=0, le=9, description="向星入中之数")
+    xiang_forward: bool = False
+    shan_direction: str = Field("", description="顺飞 / 逆飞")
+    xiang_direction: str = ""
+    shan_basis: str = Field("", description="山星顺逆的判据说明，便于用户追溯")
+    xiang_basis: str = ""
+
+
+class XuankongPattern(BaseModel):
+    """宅运格局：旺山旺向 / 双星会向 / 双星会坐 / 上山下水 / 到山 / 到向 / 两不到。"""
+
+    key: str = ""
+    name: str = ""
+    level: str = Field("", description="旺 / 平 / 煞 / 大凶")
+    summary: str = ""
+    advice: str = ""
+    to_sit: bool = Field(False, description="山盘旺星到坐山")
+    to_face: bool = Field(False, description="向盘旺星到向首")
+    shan_at_sit: bool = False
+    shan_at_face: bool = False
+    xiang_at_sit: bool = False
+    xiang_at_face: bool = False
+
+
+class XuankongRole(BaseModel):
+    """三盘的职责说明。"""
+
+    name: str = ""
+    duty: str = ""
+    good: str = ""
+    bad: str = ""
+
+
+class XuankongHouseRequest(BaseModel):
+    """宅运盘入参：坐向（度数或宅卦）+ 元运（运数或建宅年份）。
+
+    坐向二者取一：给 ``degree``（罗盘读数）最准，会一并返回坐向明细与兼向提示；
+    只知卦时传 ``trigram``，此时取该卦的**天元龙**为坐山。
+    元运二者取一：``yun`` 直接指定运数；``build_year`` 由建宅年份自动推算，
+    两者都给时以 ``yun`` 为准。
+    """
+
+    degree: Optional[float] = Field(
+        None, ge=0, lt=360, description="罗盘读到的坐山方位角；为空则用 trigram"
+    )
+    declination: float = Field(0.0, ge=-30, le=30, description="当地磁偏角")
+    trigram: str = Field(
+        "", max_length=4, description="直接指定坐山卦，如「坎」；degree 为空时使用"
+    )
+    yun: Optional[int] = Field(
+        None, ge=1, le=9, description="当运之数 1-9；为空则由 build_year 推算"
+    )
+    build_year: Optional[int] = Field(
+        None, ge=1864, le=2100, description="建宅 / 入宅年份，用于自动定元运"
+    )
+    name: str = Field("", max_length=30, description="名称（可选，仅作回显）")
+
+
+class XuankongHouse(BaseModel):
+    """宅运盘：三盘叠加 + 格局判定 + 逐宫吉凶。"""
+
+    name: str = ""
+    title: str = Field("", description="如「子山午向 · 九运宅运盘」")
+    sit: XuankongSide
+    face: XuankongSide
+    orientation: dict = Field(default_factory=dict, description="坐向明细（走度数时才有）")
+    yun: XuankongYun
+    center: XuankongCenter
+    palaces: list[XuankongHousePalace] = Field(default_factory=list)
+    pattern: XuankongPattern
+    score: int = Field(0, ge=0, le=100)
+    level: str = Field("", description="上吉 / 吉 / 平 / 欠佳 / 凶")
+    level_key: str = Field("", description="四档吉凶，驱动前端配色")
+    jianxiang: bool = Field(False, description="坐向偏离中心较多，已属兼向")
+    roles: dict[str, XuankongRole] = Field(
+        default_factory=dict, description="山星 / 向星 / 运星的职责说明"
+    )
+    key_points: list[str] = Field(default_factory=list)
+    rules_version: str = ""

@@ -49,6 +49,23 @@ from .almanac import (  # noqa: F401
     resolve_day,
     select_dates,
 )
+from .xuankong import (  # noqa: F401
+    build_month_palaces,
+    center_star_of_month,
+    dragon_mountain_of,
+    dragon_of,
+    forward_of,
+    house_chart,
+    jieqi_month_of,
+    judge_pattern,
+    month_chart,
+    stack_advice,
+    star_state,
+    tianyuan_of_trigram,
+    year_branch_of,
+    yin_yang_of,
+    yun_of_year,
+)
 from .ziwei import (  # noqa: F401
     build_ziwei,
     palace_gan,

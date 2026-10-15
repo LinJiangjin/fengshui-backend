@@ -8,6 +8,7 @@ from .bazi_profile import router as bazi_profile_router  # noqa: F401
 from .ziwei import router as ziwei_router  # noqa: F401
 from .bazhai import router as bazhai_router  # noqa: F401
 from .almanac import router as almanac_router  # noqa: F401
+from .xuankong import router as xuankong_router  # noqa: F401
 from .library import router as library_router  # noqa: F401
 from .house import router as house_router  # noqa: F401
 from .legal import router as legal_router  # noqa: F401
