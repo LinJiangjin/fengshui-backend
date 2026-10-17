@@ -15,3 +15,4 @@ from .xuankong import router as xuankong_router  # noqa: F401
 from .library import router as library_router  # noqa: F401
 from .house import router as house_router  # noqa: F401
 from .legal import router as legal_router  # noqa: F401
+from .records import router as records_router  # noqa: F401

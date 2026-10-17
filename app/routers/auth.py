@@ -26,7 +26,7 @@ from ..config import (
 )
 from ..db import get_db
 from ..deps import get_current_user
-from ..models import BaziProfile, House, SmsCode, User
+from ..models import BaziProfile, CalcRecord, House, SmsCode, User
 from ..schemas import (
     DeleteAccountOut,
     DeleteAccountRequest,
@@ -207,8 +207,8 @@ def delete_account(
 
     处置策略分两类，理由不同：
 
-    - **物理删除**：命理档案、房屋档案、短信验证码记录。这三类都是实打实的
-      个人信息（出生时刻、住址特征、手机号），注销时即刻抹掉。
+    - **物理删除**：命理档案、房屋档案、测算记录、短信验证码记录。这几类都是
+      实打实的个人信息（出生时刻、住址特征、测算参数、手机号），注销时即刻抹掉。
     - **匿名化保留**：用户行本身。清空昵称 / 头像 / 备注 / 封禁原因，手机号
       改写为不可逆标记值，status 置 deleted。这样手机号被释放（同一号码可重新
       注册成全新账号），而 created_at / login_count 等统计字段留存，后台看板
@@ -230,6 +230,12 @@ def delete_account(
     removed_houses = (
         db.query(House)
         .filter(House.owner_id == user_id)
+        .delete(synchronize_session=False)
+    )
+    # 测算记录里是出生信息与测算参数，同属个人信息，注销时一并物理删除
+    removed_records = (
+        db.query(CalcRecord)
+        .filter(CalcRecord.owner_id == user_id)
         .delete(synchronize_session=False)
     )
     # 验证码按手机号清理：注销后这些码既无用途，也不该继续留存
@@ -256,5 +262,6 @@ def delete_account(
             removed_bazi_profiles=removed_bazi,
             removed_houses=removed_houses,
             removed_sms_codes=removed_sms,
+            removed_calc_records=removed_records,
         ).model_dump()
     )

@@ -23,6 +23,7 @@ from app.db import Base, SessionLocal, engine, ping
 from app.models import (  # noqa: F401  导入即注册表
     Admin,
     BaziProfile,
+    CalcRecord,
     ElementNote,
     House,
     Scheme,
@@ -43,6 +44,7 @@ from app.routers import (
     house_router,
     legal_router,
     library_router,
+    records_router,
     xuankong_router,
     ziwei_router,
 )
@@ -55,6 +57,7 @@ _EXPECTED_TABLES = (
     "sms_codes",
     "houses",
     "bazi_profiles",
+    "calc_records",
     "schemes",
     "element_notes",
 )
@@ -189,6 +192,7 @@ app.include_router(house_router)
 app.include_router(auth_router)
 app.include_router(legal_router)
 app.include_router(admin_router)
+app.include_router(records_router)
 
 
 @app.get("/health")

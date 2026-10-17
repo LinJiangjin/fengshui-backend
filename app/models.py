@@ -6,6 +6,7 @@
 - sms_codes      短信验证码（落库而非内存，避免多进程 / 重启丢失）
 - houses         房屋档案，通过 owner_id 归属到某个用户
 - bazi_profiles  命理档案（出生信息），一个用户一份，通过 owner_id 归属
+- calc_records   测算记录（保存某次测算的参数），通过 owner_id 归属
 - schemes        装修方案（运营内容，后台增删改，App 端只读）
 - element_notes  五行宜忌解读，按五行复用，被同五行的所有方案共享
 """
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -222,6 +224,57 @@ class ElementNote(Base):
     avoid: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     # 五行相生序（木火土金水）的展示顺序
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class CalcRecord(Base):
+    """测算记录表：用户保存某次测算的**参数**，打开记录时按参数重算。
+
+    刻意不存结果快照，只存参数，原因有三：
+    1. 引擎规则随 RULES_VERSION 改版（文案与权重都绑版本），快照会留下过期判词；
+    2. 六爻 / 梅花的服务端装卦是纯函数（服务端不产生随机数），参数可完整还原；
+    3. 参数远小于结果，列表页加载轻。
+
+    号码八星（phone_energy）刻意不在可保存范围：号码属个人信息，
+    不往数据库里落完整号码——与 phone-energy 接口只回脱敏号码同一口径，
+    白名单见 routers/records.py。
+    """
+
+    __tablename__ = "calc_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # 归属用户。本功能上线后产生的数据都有主，不允许为 NULL
+    #（房屋 / 命理档案的 NULL 是用户体系上线前的历史遗留，新表不复制这个特例）
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+    # 测算类型，白名单见 routers/records.py 的 RECORD_KINDS
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    # 列表展示用：标题如「乾造 1990-05-20 14:30」，副标题如「辛未 丁酉 癸未 丙辰」
+    title: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    summary: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+
+    # 该次测算的入参 JSON（各 kind 结构不同，由客户端按页面入参提交，原样回放）
+    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    # 参数规范化（键排序）后的 sha256：同参重复保存走更新，不堆重复行
+    params_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id", "kind", "params_hash", name="uq_calc_record_params"
+        ),
+    )
 
 
 class BaziProfile(Base):

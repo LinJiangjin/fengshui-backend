@@ -336,6 +336,7 @@ class DeleteAccountOut(BaseModel):
     removed_bazi_profiles: int = 0
     removed_houses: int = 0
     removed_sms_codes: int = 0
+    removed_calc_records: int = 0
 
 
 class LoginOut(BaseModel):
@@ -1456,3 +1457,38 @@ class XuankongHouse(BaseModel):
     )
     key_points: list[str] = Field(default_factory=list)
     rules_version: str = ""
+
+
+# ---------------------------------------------------------------- 测算记录
+class RecordIn(BaseModel):
+    """保存一次测算。
+
+    params 是该次测算的**入参快照**（不是结果）：打开记录时由客户端按它
+    重新请求对应计算接口。各 kind 的入参结构不同，由客户端按页面入参提交；
+    后端只校验类型白名单与体积，不校验具体字段——页面自己的表单会校验。
+    """
+
+    kind: str = Field(..., max_length=20, description="测算类型，白名单见 records 路由")
+    # 标题不能为空：它是列表行的主文本，空标题等于列表里出现一行空白
+    title: str = Field(..., min_length=1, max_length=60, description="列表标题，如 乾造 1990-05-20")
+    summary: str = Field("", max_length=120, description="列表副标题，如四柱摘要")
+    params: dict = Field(default_factory=dict, description="测算入参，各 kind 结构不同")
+
+
+class RecordOut(BaseModel):
+    """列表项：不含 params，保持列表轻量；详情走 RecordDetailOut。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    kind: str
+    title: str = ""
+    summary: str = ""
+    created_at: Optional[dt.datetime] = None
+    updated_at: Optional[dt.datetime] = None
+
+
+class RecordDetailOut(RecordOut):
+    """详情：带 params，打开记录时按它重算。"""
+
+    params: dict = Field(default_factory=dict)
