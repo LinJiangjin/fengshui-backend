@@ -25,6 +25,7 @@ import unittest
 
 from app.engine import (
     center_star_of_month,
+    double_star_of,
     dragon_mountain_of,
     dragon_of,
     forward_of,
@@ -40,6 +41,7 @@ from app.engine import (
 )
 from app.engine.compass import opposite_mountain
 from app.engine.constants import (
+    DOUBLE_STAR_CLASSIC,
     DRAGON_MOUNTAINS,
     EARTHLY_BRANCHES,
     MOUNTAIN_DRAGON,
@@ -641,6 +643,126 @@ class CacheCase(unittest.TestCase):
             house_chart(degree=MOUNTAINS.index(m) * 15.0, yun=9)
         elapsed = time.perf_counter() - start
         self.assertLess(elapsed, 2.0, f"24 山耗时 {elapsed:.2f}s，缓存可能失效")
+
+
+class DoubleStarCase(unittest.TestCase):
+    """双星组合判词。
+
+    锁的是**分层策略**与可读性不变量，不是字面文案：
+    有赋文的走经典层、没赋文的只能标五行生克、含五黄的必须点名五黄。
+    """
+
+    FOUR = {"旺", "平", "煞", "大凶"}
+    PAIRS = [(a, b) for a in range(1, 10) for b in range(a, 10)]
+
+    def _pair(self, shan, xiang, yun=9, is_center=False):
+        return double_star_of(
+            shan, xiang, star_state(shan, yun), star_state(xiang, yun), is_center
+        )
+
+    def test_all_fortyfive_pairs_produce_verdict(self):
+        self.assertEqual(len(self.PAIRS), 45)
+        for a, b in self.PAIRS:
+            p = self._pair(a, b)
+            for key in ("name", "nature", "verdict", "advice", "source"):
+                self.assertTrue(p[key], f"{a}{b} 的 {key} 为空")
+            self.assertIn(p["level"], self.FOUR, f"{a}{b}")
+
+    def test_order_does_not_matter(self):
+        """赋文讲的是「同宫」，组合名与档位必须与山向顺序无关。
+
+        注意 ``wuxing`` 是**有意**保留方向性的（以山星为「我」判我克 / 克我），
+        所以这里不断言它对称。
+        """
+        for a, b in self.PAIRS:
+            self.assertEqual(self._pair(a, b)["name"], self._pair(b, a)["name"])
+            self.assertEqual(self._pair(a, b)["level"], self._pair(b, a)["level"])
+            self.assertEqual(self._pair(a, b)["source"], self._pair(b, a)["source"])
+
+    def test_classic_pairs_are_sourced(self):
+        """有赋文的组合必须标出出处，不能混在推导层里。"""
+        for (a, b) in DOUBLE_STAR_CLASSIC:
+            p = self._pair(a, b)
+            self.assertEqual((a, b), tuple(sorted(p["key"] and (a, b))))
+            self.assertNotEqual(p["source"], "五行生克", f"{a}{b} 应有赋文出处")
+            self.assertTrue(p["source"])
+
+    def test_derived_pairs_claim_no_classic_source(self):
+        """没赋文的组合一律标五行生克——不能把推导结果包装成古诀。"""
+        derived = [pr for pr in self.PAIRS if pr not in DOUBLE_STAR_CLASSIC]
+        self.assertTrue(derived)
+        for a, b in derived:
+            self.assertEqual(self._pair(a, b)["source"], "五行生克", f"{a}{b}")
+
+    def test_wuhuang_pairs_are_demoted_and_named(self):
+        """组合里有五黄：档位至少「煞」，且必须点名五黄是正煞。"""
+        for a, b in self.PAIRS:
+            if 5 not in (a, b):
+                continue
+            p = self._pair(a, b)
+            order = ["旺", "平", "煞", "大凶"]
+            self.assertGreaterEqual(
+                order.index(p["level"]), order.index("煞"), f"{a}{b}"
+            )
+            # 二五交加 / 五黄重叠本身已经说透，其余组合也必须补一句
+            self.assertIn("五黄", p["nature"], f"{a}{b}")
+
+    def test_non_wuhuang_pairs_never_mention_wuhuang(self):
+        for a, b in self.PAIRS:
+            if 5 in (a, b):
+                continue
+            self.assertNotIn("五黄", self._pair(a, b)["nature"], f"{a}{b}")
+
+    def test_the_two_deadliest_pairs_are_always_daxiong(self):
+        """二五交加与五黄重叠：不看当令与否都按大凶论。"""
+        for pair in ((2, 5), (5, 5)):
+            for yun in range(1, 10):
+                p = self._pair(pair[0], pair[1], yun=yun)
+                self.assertEqual(p["level"], "大凶", f"{pair} 在 {yun} 运")
+
+    def test_center_palace_stays_flat(self):
+        """中宫恒判「平」，与 _palace_level 同口径。"""
+        for a, b in self.PAIRS:
+            self.assertEqual(self._pair(a, b, is_center=True)["level"], "平")
+
+    def test_timing_switches_verdict(self):
+        """当令与失令必须给出不同的断语，否则等于没算。"""
+        switched = 0
+        for a, b in self.PAIRS:
+            on = self._pair(a, b, yun=a)          # a 当运 -> 当令
+            off = self._pair(a, b, yun=(a % 9) + 1)  # a 退/死 -> 未必当令
+            if on["timing"] != off["timing"]:
+                self.assertNotEqual(on["verdict"], off["verdict"], f"{a}{b}")
+                switched += 1
+        self.assertGreater(switched, 0)
+
+    def test_no_markdown_asterisks(self):
+        """前端纯文本渲染，markdown 星号会原样露出。"""
+        for a, b in self.PAIRS:
+            p = self._pair(a, b)
+            for key in ("name", "nature", "verdict", "advice"):
+                self.assertNotIn("**", p[key], f"{a}{b} 的 {key}")
+
+    def test_repeated_star_name_reads_naturally(self):
+        """同数叠见不能写成「九紫九紫同宫」。"""
+        p = self._pair(9, 9)
+        self.assertNotIn("九紫九紫", p["name"])
+        self.assertIn("九紫", p["name"])
+
+    def test_house_chart_carries_pair(self):
+        """宅运盘每一宫都要带双星组合，且大凶组合要进行动要点。"""
+        chart = house_chart(degree=0.0, yun=8)
+        for p in chart["palaces"]:
+            self.assertIn("pair", p)
+            self.assertEqual(p["pair"]["key"],
+                             "".join(str(x) for x in sorted(
+                                 (p["shan_star"], p["xiang_star"]))))
+        bad = [p for p in chart["palaces"]
+               if not p["is_center"] and p["pair"]["level"] == "大凶"]
+        self.assertTrue(bad, "八运子山午向应有二五交加")
+        joined = " ".join(chart["key_points"])
+        for p in bad:
+            self.assertIn(p["pair"]["name"], joined)
 
 
 if __name__ == "__main__":  # pragma: no cover

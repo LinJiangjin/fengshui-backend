@@ -29,9 +29,14 @@ PALACE_KEYS = {
     "shan_star", "shan_star_name", "yun_star", "yun_star_name",
     "xiang_star", "xiang_star_name",
     "shan_state", "xiang_state", "yun_state",
-    "level", "role", "has_lost_wuhuang", "is_sit", "is_face",
+    "level", "role", "pair", "has_lost_wuhuang", "is_sit", "is_face",
 }
 STATE_KEYS = {"state", "level", "note", "delta", "is_wang"}
+# 双星组合：与宫位 level 是两个维度（得不得时 vs 出什么事）
+PAIR_KEYS = {
+    "key", "shan_star", "xiang_star", "name", "source", "wuxing",
+    "timing", "nature", "verdict", "level", "advice",
+}
 HOUSE_KEYS = {
     "name", "title", "sit", "face", "orientation", "yun", "center",
     "palaces", "pattern", "score", "level", "level_key", "jianxiang",
@@ -196,6 +201,8 @@ class XuankongApiCase(unittest.TestCase):
             self.assertEqual(set(p["shan_state"]), STATE_KEYS)
             self.assertEqual(set(p["xiang_state"]), STATE_KEYS)
             self.assertEqual(set(p["yun_state"]), STATE_KEYS)
+            self.assertTrue(p["pair"], p["direction"])
+            self.assertEqual(set(p["pair"]), PAIR_KEYS)
         for key in ("shan_star", "yun_star", "xiang_star"):
             self.assertEqual(sorted(p[key] for p in data["palaces"]), list(range(1, 10)))
 

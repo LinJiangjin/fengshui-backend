@@ -88,3 +88,72 @@ class TestFlyingStar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNoMarkdownInOutput(unittest.TestCase):
+    """所有下发到客户端的文案都不得含 markdown 标记。
+
+    后端文案是给 Flutter 纯文本渲染的，``**`` 之类的标记会原样露出。
+    这条护栏曾经连续踩了四次，所以这里**跨引擎统一扫一遍**：
+    取各引擎的一份代表性输出，递归遍历所有字符串，发现标记即红。
+    """
+
+    def _walk(self, node, path="root"):
+        if isinstance(node, str):
+            for mark in ("**", "__", "## ", "`"):
+                self.assertNotIn(mark, node, f"{path} 含 {mark!r}: {node[:60]}")
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                self._walk(v, f"{path}.{k}")
+        elif isinstance(node, (list, tuple)):
+            for i, v in enumerate(node):
+                self._walk(v, f"{path}[{i}]")
+
+    def test_all_engines(self):
+        import datetime as dt
+
+        from app.engine import (
+            build_bazi,
+            build_bazi_fortune,
+            build_bazhai,
+            build_divination,
+            build_match,
+            build_ziwei,
+            build_ziwei_reading,
+            build_ziwei_years,
+            day_almanac,
+            house_chart,
+            meihua_chart,
+            month_chart,
+            true_solar_time,
+        )
+
+        when = dt.datetime(2026, 10, 17, 9, 30)
+        bazi = build_bazi(1991, 9, 10, 7, 35, gender="男", longitude=113.26)
+        true_dt, _ = true_solar_time(1991, 9, 10, 7, 35, 113.26)
+        ziwei = build_ziwei(1991, 9, 10, 7, 35, gender="男", longitude=113.26)
+
+        samples = {
+            "bazi": bazi,
+            "bazi_fortune": build_bazi_fortune(bazi, true_dt, 1991),
+            "bazhai": build_bazhai(1991, gender="男", degree=0.0),
+            "day_almanac": day_almanac(dt.date(2026, 10, 17)),
+            "month_chart": month_chart(dt.date(2026, 10, 17)),
+            "house_chart": house_chart(degree=0.0, yun=8),
+            "ziwei": ziwei,
+            "ziwei_reading": build_ziwei_reading(ziwei),
+            "ziwei_years": build_ziwei_years(ziwei, birth_year=1991, count=3),
+            "liuyao": build_divination("liuyao", lines=[7, 9, 8, 6, 7, 8],
+                                       when=when, topic="财运"),
+            "meihua": meihua_chart(when=when, topic="出行"),
+            "marriage_zodiac": build_match("zodiac", a_year=1990, b_year=1991),
+            "marriage_bazi": build_match(
+                "bazi",
+                a={"year": 1991, "month": 9, "day": 10, "hour": 7,
+                   "gender": "男", "longitude": 113.26},
+                b={"year": 1993, "month": 3, "day": 5, "hour": 14,
+                   "gender": "女", "longitude": 116.4},
+            ),
+        }
+        for name, chart in samples.items():
+            self._walk(chart, name)

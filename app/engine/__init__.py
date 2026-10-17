@@ -52,6 +52,7 @@ from .almanac import (  # noqa: F401
 from .xuankong import (  # noqa: F401
     build_month_palaces,
     center_star_of_month,
+    double_star_of,
     dragon_mountain_of,
     dragon_of,
     forward_of,
@@ -74,6 +75,32 @@ from .ziwei import (  # noqa: F401
 )
 from .ziwei_reading import build_ziwei_reading  # noqa: F401
 from .ziwei_year import build_ziwei_years, gan_zhi_of_year  # noqa: F401
+from .marriage import (  # noqa: F401
+    branch_relation_of,
+    build_match,
+    bazi_match,
+    san_he_of,
+    zodiac_branch_of,
+    zodiac_match,
+)
+from .phone_energy import (  # noqa: F401
+    analyze_number,
+    mask_number,
+    split_pairs,
+    star_of_pair,
+)
+from .divination import (  # noqa: F401
+    build_divination,
+    hexagram_of,
+    liuyao_chart,
+    meihua_chart,
+)
+from .bazi_fortune import (  # noqa: F401
+    build_bazi_fortune,
+    build_bazi_years,
+    da_yun_forward_of,
+    da_yun_of,
+)
 from .bazi import (  # noqa: F401
     apply_night_zi_fix,
     build_bazi,

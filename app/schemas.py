@@ -186,6 +186,78 @@ class BaziStrength(BaseModel):
     detail: dict = Field(default_factory=dict, description="得令/得地/得势明细")
 
 
+class BaziDaYunStep(BaseModel):
+    """一步大运（十年）。
+
+    字段名用 ``from_age`` / ``to_age`` 而非 ``from`` / ``to``——``from``
+    是 Python 关键字，做不了 pydantic 字段名。
+    """
+
+    index: int = Field(0, description="第几步，0 起")
+    gan_zhi: str = Field("", description="大运干支，如 甲申")
+    gan: str = Field("", description="大运天干")
+    zhi: str = Field("", description="大运地支")
+    element: str = Field("", description="大运天干五行")
+    shi_shen: str = Field("", description="大运天干对日主的十神")
+    na_yin: str = Field("", description="大运纳音")
+    field: str = Field("", description="该十神对应的生活领域")
+    from_age: int = Field(0, description="起始岁数")
+    to_age: int = Field(0, description="结束岁数")
+    from_year: int = Field(0, description="起始年份（约）")
+    to_year: int = Field(0, description="结束年份（约）")
+    is_current: bool = Field(False, description="是否为当前所走的一步")
+    plain: str = Field("", description="这一步的白话解释")
+
+
+class BaziDaYun(BaseModel):
+    """大运：起运岁数 + 八步运程。"""
+
+    forward: bool = Field(True, description="True 顺行（阳男阴女）/ False 逆行")
+    jie_name: str = Field("", description="起运所数的那个节，如 寒露")
+    jie_at: str = Field("", description="该节的交节时刻")
+    gap_days: int = Field(0, description="出生到该节相隔的天数")
+    start_age: int = Field(0, description="起运岁数")
+    start_months: int = Field(0, description="起运岁数之外的零头月数")
+    start_date: str = Field("", description="起运日期（约）")
+    start_year: int = Field(0, description="起运年份（约）")
+    age: int = Field(0, description="当前周岁")
+    basis: str = Field("", description="起运推算依据，便于复核")
+    plain: str = Field("", description="当前大运的一句话白话")
+    steps: list[BaziDaYunStep] = Field(default_factory=list, description="八步运程")
+    current: BaziDaYunStep | None = Field(None, description="当前所走的一步；未入运时为 None")
+
+
+class BaziYearRelation(BaseModel):
+    """流年地支与命局某一支的关系。"""
+
+    kind: str = Field("", description="冲 / 刑 / 害 / 合")
+    palace: str = Field("", description="命局中被牵动的那一柱，如 日柱")
+    branch: str = Field("", description="命局该柱的地支")
+    plain: str = Field("", description="该关系的白话解释")
+
+
+class BaziYear(BaseModel):
+    """一年流年。"""
+
+    year: int = Field(0, description="公历年")
+    gan_zhi: str = Field("", description="流年干支")
+    age: int = Field(0, description="当年周岁")
+    shi_shen: str = Field("", description="流年天干对日主的十神")
+    shi_shen_plain: str = Field("", description="该十神的白话解释")
+    da_yun: dict | None = Field(None, description="当年所属的大运；未入运时为 None")
+    is_da_yun_switch: bool = Field(False, description="当年是否换大运")
+    relations: list[BaziYearRelation] = Field(
+        default_factory=list, description="流年地支与命局四支的冲刑害合"
+    )
+    tian_ke_di_chong: bool = Field(False, description="流年与日柱是否天克地冲")
+    favorable_hit: bool = Field(False, description="流年天干五行是否落在喜用神")
+    unfavorable_hit: bool = Field(False, description="流年天干五行是否落在忌神")
+    focus: str = Field("", description="当年重点领域")
+    stance: str = Field("", description="宜主动 / 宜守成 / 稳中求进")
+    plain: str = Field("", description="这一年的白话导语")
+    points: list[str] = Field(default_factory=list, description="逐条结论")
+
+
 class BaziResponse(BaseModel):
     """排盘结果。所有数值由 bazi 引擎确定性算出，不经过大模型。"""
 
@@ -197,6 +269,11 @@ class BaziResponse(BaseModel):
     strength: BaziStrength
     favorable: list[BaziGod] = Field(default_factory=list, description="喜用神")
     unfavorable: list[BaziGod] = Field(default_factory=list, description="忌神")
+    da_yun: BaziDaYun | None = Field(None, description="大运：起运岁数 + 八步运程")
+    years: list[BaziYear] = Field(
+        default_factory=list,
+        description="逐年流年（默认自今年起 12 年，保证至少跨过一次换运）",
+    )
 
 
 # ---------------------------------------------------------------- 用户 / 认证
@@ -549,6 +626,174 @@ class ZiweiResponse(BaseModel):
         default_factory=list,
         description="逐年流年运势（默认自今年起 10 年）",
     )
+
+
+# ---------------------------------------------------------------- 号码八星（数字能量）
+class PhoneEnergyRequest(BaseModel):
+    """号码入参。
+
+    号码属个人信息，服务端**不回显完整号码**：结果只给 ``masked``，
+    错误文案也只报脱敏形式，避免号码进日志与错误回显。
+    """
+
+    number: str = Field(..., min_length=2, max_length=30,
+                        description="号码原文，可含分隔符与字母，只取数字部分")
+    kind: str = Field("general", pattern=r"^(mobile|plate|address|general)$",
+                      description="mobile 手机号 / plate 车牌 / address 门牌 / general 其他")
+
+
+class PhoneEnergyItem(BaseModel):
+    """一组相邻两位对应的星。"""
+
+    pair: str = Field("", description="两位数字，如 13")
+    star: str | None = Field(None, description="星名；含 0 / 5 时为 None")
+    level: str = Field("", description="四档吉凶：旺 / 平 / 煞 / 大凶")
+    kind: str = Field("", description="吉 / 凶；含 0 / 5 时为空")
+    is_tail: bool = Field(False, description="是否属于末尾加重的一组")
+    score: int = Field(0, description="这一组的加减分")
+    plain: str = Field("", description="这一组的白话解释")
+
+
+class PhoneEnergyResponse(BaseModel):
+    """号码八星结果。
+
+    ⚠ ``nature_note`` 是性质声明，前端必须原样展示，不能淡化——
+    数字能量属民间民俗说法，不允许与玄空 / 八字同等权威地呈现。
+    """
+
+    kind: str = ""
+    masked: str = Field("", description="脱敏后的号码，如 138****5678")
+    length: int = 0
+    pairs: list[str] = Field(default_factory=list, description="相邻两位重叠拆分结果")
+    items: list[PhoneEnergyItem] = Field(default_factory=list, description="逐组星曜")
+    distribution: dict = Field(default_factory=dict, description="八星出现次数")
+    dominant: str | None = Field(None, description="出现最多的星")
+    dominant_plain: str = ""
+    tail_stars: list[str] = Field(default_factory=list, description="末尾三组的星")
+    zeros: int = Field(0, description="0 的个数（主削弱）")
+    fives: int = Field(0, description="5 的个数（主加强）")
+    good: int = Field(0, description="吉星组数")
+    bad: int = Field(0, description="凶星组数")
+    score: int = Field(0, ge=0, le=100)
+    level: str = ""
+    level_key: str = ""
+    plain: str = ""
+    points: list[str] = Field(default_factory=list)
+    advice: str = ""
+    nature_note: str = Field("", description="性质声明，必须原样展示")
+    rules_version: str = ""
+
+
+# ---------------------------------------------------------------- 合婚配对
+class MarriageParty(BaseModel):
+    """一方：生肖模式可只给年（带月日可精确立春分界），八字模式需完整信息。"""
+
+    year: int = Field(..., ge=1900, le=2100, description="出生年（公历）")
+    month: int = Field(0, ge=0, le=12, description="出生月；0 表示不参与立春分界")
+    day: int = Field(0, ge=0, le=31, description="出生日；0 表示不参与立春分界")
+    hour: int = Field(0, ge=0, le=23, description="出生小时（八字模式必填）")
+    minute: int = Field(0, ge=0, le=59, description="出生分钟")
+    gender: str = Field("男", pattern=r"^(男|女)$", description="男 / 女")
+    longitude: float = Field(120.0, ge=73.0, le=135.0,
+                             description="出生地东经度数（八字模式用于真太阳时）")
+    name: str = Field("", max_length=20, description="称呼，仅作回显")
+
+
+class MarriageRequest(BaseModel):
+    """合婚入参：两方 + 模式。"""
+
+    mode: str = Field(..., pattern=r"^(zodiac|bazi)$",
+                      description="zodiac 生肖合婚 / bazi 八字合婚")
+    a: MarriageParty
+    b: MarriageParty
+
+
+class MarriageItem(BaseModel):
+    """合婚的一个分项（生肖 / 日干 / 日支 / 喜用）。"""
+
+    key: str = Field("", description="year / day_stem / day_branch / yong")
+    label: str = Field("", description="分项名，如「日支（夫妻宫）」")
+    relation: str = Field("", description="六合 / 六冲 / 六害 / 相刑 / 自刑 / 半合 / 同支 / 天干五合 / 无合冲")
+    level: str = Field("", description="四档吉凶：旺 / 平 / 煞 / 大凶")
+    score: int = Field(0, description="该项加减分（0 表示无加减）")
+    plain: str = Field("", description="这一项的白话解释")
+    detail: str = Field("", description="这一项的干支对照")
+
+
+class MarriageResponse(BaseModel):
+    """合婚结果。所有关系由确定性规则算出，不经过大模型。"""
+
+    mode: str = ""
+    a: dict = Field(default_factory=dict, description="甲方：生肖 / 年支 / 日柱 / 喜用")
+    b: dict = Field(default_factory=dict, description="乙方")
+    items: list[MarriageItem] = Field(default_factory=list, description="逐项配对关系")
+    score: int = Field(0, ge=0, le=100, description="综合分")
+    level: str = Field("", description="上吉 / 吉 / 平 / 欠佳 / 凶")
+    level_key: str = Field("", description="四档吉凶：旺 / 平 / 煞 / 大凶")
+    plain: str = Field("", description="一句话白话结论")
+    points: list[str] = Field(default_factory=list, description="逐条解读")
+    advice: str = Field("", description="落到相处上的建议")
+    rules_version: str = ""
+
+
+# ---------------------------------------------------------------- 占卜 · 六爻 / 梅花易数
+class DivinationRequest(BaseModel):
+    """问卦入参。
+
+    **起卦由客户端负责**：铜钱摇哪一面、随手取什么数本质是随机事件，
+    不是服务端该掺和的东西。服务端只收「结果」并做确定性的装卦与解读。
+
+    * ``mode="liuyao"``：必须给 ``lines``（六个爻值，6 老阴 / 7 少阳 /
+      8 少阴 / 9 老阳，自初爻到上爻）。
+    * ``mode="meihua"``：给 ``numbers`` 走数字起卦，否则按 ``when`` 时间起卦。
+    """
+
+    mode: str = Field(..., pattern=r"^(liuyao|meihua)$",
+                      description="liuyao 六爻 / meihua 梅花易数")
+    lines: list[int] | None = Field(
+        None, description="六爻模式：六个爻值 6/7/8/9，自初爻到上爻"
+    )
+    numbers: list[int] | None = Field(
+        None, description="梅花模式：2~3 个正整数（上卦 / 下卦 / 动爻）"
+    )
+    when: str | None = Field(
+        None, description="起卦时刻 YYYY-MM-DD HH:MM；不给则用服务端当前时间"
+    )
+    topic: str = Field("决策", description="所问之事，决定六爻取哪一亲为用神")
+    gender: str = Field("男", pattern=r"^(男|女)$",
+                        description="男 / 女，仅影响「感情」一类取用")
+    question: str = Field("", max_length=60, description="问题原文，仅作回显")
+
+
+class DivinationResponse(BaseModel):
+    """卦例结果。所有装卦结果由确定性规则算出，不经过大模型、不含随机数。"""
+
+    mode: str = Field("", description="liuyao / meihua")
+    question: str = ""
+    topic: str = ""
+    when: str = Field("", description="起卦时刻")
+    day: dict | None = Field(None, description="六爻：日干支与月建")
+    ben: dict | None = Field(None, description="六爻本卦 / 梅花主卦")
+    bian: dict | None = Field(None, description="变卦")
+    lines: list[dict] = Field(default_factory=list, description="六爻逐爻装卦明细")
+    moving: list[str] = Field(default_factory=list, description="动爻所在")
+    shi: dict | None = Field(None, description="世爻（我）")
+    ying: dict | None = Field(None, description="应爻（对方 / 所问之事）")
+    yong: dict | None = Field(None, description="用神")
+    hu: dict | None = Field(None, description="梅花：互卦（过程）")
+    zhu: dict | None = Field(None, description="梅花：主卦")
+    source: str = Field("", description="梅花：数字起卦 / 时间起卦")
+    basis: str = Field("", description="梅花：起卦依据，可复核")
+    ti: dict | None = Field(None, description="梅花：体卦（我）")
+    relation: str = Field("", description="梅花：体用关系")
+    verdict: str = Field("", description="梅花：吉凶判词")
+    moving_index: int = Field(0, description="梅花：动爻第几爻（1-6）")
+    score: int = Field(0, description="六爻：倾向分（可解释）")
+    stance: str = Field("", description="宜主动 / 稳中求进 / 宜守成 / 宜退守 / 大吉 …")
+    level: str = Field("", description="四档吉凶：旺 / 平 / 煞 / 大凶")
+    plain: str = Field("", description="一句话白话结论")
+    points: list[str] = Field(default_factory=list, description="逐条解读")
+    rules_version: str = ""
 
 
 # ---------------------------------------------------------------- 八宅游年
@@ -1048,6 +1293,26 @@ class XuankongStarState(BaseModel):
     is_wang: bool = Field(False, description="是否为当运旺星")
 
 
+class XuankongPair(BaseModel):
+    """山星与向星同宫的「双星组合」判词。
+
+    与宫位的 ``level`` 是两个维度：``level`` 说这两颗星**得不得时**，
+    ``pair`` 说它们凑在一起**出什么事**。
+    """
+
+    key: str = Field("", description="组合编号，如「25」")
+    shan_star: int = Field(0, ge=0, le=9, description="山星")
+    xiang_star: int = Field(0, ge=0, le=9, description="向星")
+    name: str = Field("", description="组合名，如「二五交加」；无赋文时为星名合写")
+    source: str = Field("", description="出处：紫白诀 / 玄空秘旨 / 河图生成数 / 五行生克")
+    wuxing: str = Field("", description="两星五行关系：比和 / 相生 / 我生 / 生我 / 相克 / 我克 / 克我")
+    timing: str = Field("", description="当令 / 失令")
+    nature: str = Field("", description="这两颗星同宫是什么性质（与运无关）")
+    verdict: str = Field("", description="当令或失令下的具体断语")
+    level: str = Field("", description="组合吉凶，复用四档值域")
+    advice: str = Field("", description="可执行的行动建议")
+
+
 class XuankongHousePalace(BaseModel):
     """宅运盘的一宫：山星 / 运星 / 向星三盘叠加。"""
 
@@ -1067,6 +1332,9 @@ class XuankongHousePalace(BaseModel):
     yun_state: XuankongStarState
     level: str = Field("", description="本宫综合吉凶，复用四档值域")
     role: str = Field("", description="本宫宜作何用")
+    pair: XuankongPair | None = Field(
+        None, description="山星与向星的双星组合判词"
+    )
     has_lost_wuhuang: bool = Field(False, description="本宫有失运五黄")
     is_sit: bool = Field(False, description="是否为坐山宫")
     is_face: bool = Field(False, description="是否为向首宫")

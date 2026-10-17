@@ -48,14 +48,19 @@ else:
 from .bazhai import lichun_year
 from .compass import opposite_mountain, orient
 from .constants import (
+    CONTROLS,
+    DOUBLE_STAR_CLASSIC,
     DRAGON_MOUNTAINS,
     EARTHLY_BRANCHES,
     FLYING_ORDER,
+    GENERATES,
     JIE_TO_MONTH,
     MONTH_NAMES,
     MONTH_WHITE_BASE,
     MOUNTAIN_DRAGON,
     MOUNTAIN_YIN_YANG,
+    PAIR_WUHUANG_FLOOR,
+    PAIR_WUXING_TEXT,
     PALACE_BY_LUOSHU,
     PATTERN_INFO,
     STAR_INFO,
@@ -78,6 +83,7 @@ from .lunar_cache import INSTALLED as _LUNAR_YEAR_CACHE  # noqa: F401  装多年
 __all__ = [
     "build_month_palaces",
     "center_star_of_month",
+    "double_star_of",
     "dragon_mountain_of",
     "dragon_of",
     "forward_of",
@@ -621,6 +627,128 @@ def _palace_level(shan_state: dict[str, Any], xiang_state: dict[str, Any],
     return "大凶"
 
 
+def _pair_wuxing(a: int, b: int) -> str:
+    """两星五行的生克关系，返回 ``比和 / 相生 / 我生 / 生我 / 相克 / 我克 / 克我``。
+
+    ``我`` 指排在前面的山星。比和与相生 / 相克是对称关系，取不到方向性。
+    """
+    ea = STAR_INFO[a]["element"]
+    eb = STAR_INFO[b]["element"]
+    if ea == eb:
+        return "比和"
+    if GENERATES[ea] == eb:
+        return "我生"
+    if GENERATES[eb] == ea:
+        return "生我"
+    if CONTROLS[ea] == eb:
+        return "我克"
+    return "克我"
+
+
+def double_star_of(
+    shan: int,
+    xiang: int,
+    shan_state: dict[str, Any],
+    xiang_state: dict[str, Any],
+    is_center: bool = False,
+) -> dict[str, Any]:
+    """山星与向星同宫的「双星组合」判词。
+
+    单看一颗星的旺衰只能说「得不得时」；两星交会才生出「出什么事」。
+    判词分两层（见 ``DOUBLE_STAR_CLASSIC`` 的说明）：
+    有可靠赋文的走经典层，没有的只由五行生克 + 当令与否推出，不编兆应。
+
+    Args:
+        shan: 山星数 1-9。
+        xiang: 向星数 1-9。
+        shan_state / xiang_state: :func:`star_state` 的结果，用来定当令与否。
+        is_center: 是否中宫。中宫恒判「平」（与 :func:`_palace_level` 同口径）。
+
+    Returns:
+        ``{key, name, source, wuxing, timing, nature, verdict, level, advice}``
+    """
+    a, b = sorted((shan, xiang))
+    entry = DOUBLE_STAR_CLASSIC.get((a, b))
+
+    # 当令：山星或向星其一得时（旺 / 生）即算当令——组合里有一颗得力就压得住
+    timing = "当令" if (
+        shan_state["state"] in ("旺", "生") or xiang_state["state"] in ("旺", "生")
+    ) else "失令"
+
+    relation = _pair_wuxing(shan, xiang)
+    # 「我生 / 生我」统称相生，「我克 / 克我」统称相克，用于取推导层模板
+    bucket = {
+        "我生": "我生", "生我": "生我",
+        "我克": "我克", "克我": "克我",
+        "比和": "比和",
+    }[relation]
+
+    if entry is not None:
+        name = entry["name"]
+        source = entry["source"]
+        nature = entry["nature"]
+        verdict = entry["on"] if timing == "当令" else entry["off"]
+        level = entry["level_on"] if timing == "当令" else entry["level_off"]
+        advice = entry["advice"]
+    else:
+        # 组合名取**规范序**（小星在前）：同宫征象与谁在山谁在向无关，
+        # 山向顺序由 shan_star / xiang_star 两个字段各自带着，不丢信息。
+        # 同数叠见（如 9+9）写「九紫九紫同宫」读着别扭，改说「叠见」。
+        name = (f"{STAR_INFO[a]['name']}叠见" if a == b
+                else f"{STAR_INFO[a]['name']}{STAR_INFO[b]['name']}同宫")
+        source = "五行生克"
+        ea = STAR_INFO[shan]["element"]
+        eb = STAR_INFO[xiang]["element"]
+        if relation == "比和":
+            nature = f"{STAR_INFO[shan]['name']}与{STAR_INFO[xiang]['name']}" \
+                     f"同属{ea}，两星同气。"
+        elif bucket in ("我生", "生我"):
+            nature = f"{ea}与{eb}相生（{relation}），两星有情。"
+        else:
+            nature = f"{ea}与{eb}相克（{relation}），两星相战。"
+        tpl = PAIR_WUXING_TEXT[bucket]
+        verdict = tpl["on"] if timing == "当令" else tpl["off"]
+        level = tpl["level_on"] if timing == "当令" else tpl["level_off"]
+        advice = "当令宜作常用之区，保持整洁明亮。" if timing == "当令" \
+            else "失令宜静守，作储物或次要空间，不宜大动。"
+
+    # 五黄是硬约束：只要组合里有五黄，档位至少压到「煞」，不参与生克累加。
+    # 二五交加 / 五黄重叠本身已经把五黄说透了，其余组合必须补一句——
+    # 否则「四绿五黄同宫」只讲生克，用户看不出这一宫为什么特殊。
+    if 5 in (a, b):
+        order = ["旺", "平", "煞", "大凶"]
+        if order.index(level) < order.index(PAIR_WUHUANG_FLOOR):
+            level = PAIR_WUHUANG_FLOOR
+        if (a, b) not in ((2, 5), (5, 5)):
+            # 前端是纯文本渲染，不能用 markdown 星号
+            nature = (
+                f"{nature}另外，五黄是正煞——玄空里最凶的一颗星，"
+                f"只要它落在这宫，就不能只按五行生克看。"
+            )
+            advice = (
+                "五黄所在宜静：不作卧室、厨房，不动土，不放大件电器；"
+                "宜用铜器或金属化泄，保持整洁。"
+            )
+
+    if is_center:
+        # 中宫是全宅气机枢纽，不以飞星吉凶论（与 _palace_level 同口径）
+        level = "平"
+
+    return {
+        "key": f"{a}{b}",
+        "shan_star": shan,
+        "xiang_star": xiang,
+        "name": name,
+        "source": source,
+        "wuxing": relation,
+        "timing": timing,
+        "nature": nature,
+        "verdict": verdict,
+        "level": level,
+        "advice": advice,
+    }
+
+
 def _palace_role(shan_state: dict[str, Any], xiang_state: dict[str, Any],
                  is_center: bool) -> str:
     """该宫宜作何用的建议文案。"""
@@ -640,12 +768,18 @@ def _palace_role(shan_state: dict[str, Any], xiang_state: dict[str, Any],
 
 
 def _score_house(pattern: dict[str, Any], palaces: list[dict[str, Any]]) -> int:
-    """宅运盘综合评分（可解释：格局分 + 逐宫旺衰分 + 五黄修正）。"""
+    """宅运盘综合评分（可解释：格局分 + 逐宫旺衰分 + 五黄修正 + 凶星组合修正）。
+
+    「凶星组合」只罚 **大凶档** 的双星（二五交加、五黄重叠这类有明确赋文的），
+    且带上限：双星组合本来是逐宫解读用的，若整张盘的分数都由它决定，
+    就抢了格局分的主判据地位。
+    """
     cfg = XUANKONG_SCORE
     total = float(cfg["base"] + cfg["pattern"].get(pattern["key"], 0))
 
     acc = 0.0
     wuhuang = 0
+    bad_pair = 0
     for p in palaces:
         if p["is_center"]:
             continue
@@ -653,10 +787,13 @@ def _score_house(pattern: dict[str, Any], palaces: list[dict[str, Any]]) -> int:
         acc += cfg["state"].get(p["xiang_state"]["state"], 0)
         if p["has_lost_wuhuang"]:
             wuhuang += 1
+        if p["pair"]["level"] == "大凶":
+            bad_pair += 1
 
     acc = max(-cfg["state_cap"], min(cfg["state_cap"], acc))
     total += acc
     total += max(cfg["wuhuang_cap"], cfg["wuhuang"] * wuhuang)
+    total += max(cfg["pair_cap"], cfg["pair"] * bad_pair)
     return int(max(cfg["min"], min(cfg["max"], round(total))))
 
 
@@ -686,6 +823,16 @@ def _house_key_points(chart: dict[str, Any]) -> list[str]:
         points.append(
             f"{where}有失运五黄，忌动土、安床与开门；"
             "宜用金属器物或静水化泄，保持此位整洁。"
+        )
+
+    # 双星组合里的大凶档（二五交加 / 五黄重叠这类有赋文的）必须单独点出来：
+    # 它们不看当令与否都凶，是唯一需要优先处理的逐宫事项
+    worst_pairs = [p for p in chart["palaces"]
+                   if not p["is_center"] and p["pair"]["level"] == "大凶"]
+    for p in worst_pairs:
+        points.append(
+            f"{p['direction']}（{p['trigram']}宫）是「{p['pair']['name']}」："
+            f"{p['pair']['verdict']}{p['pair']['advice']}"
         )
 
     wang = [p for p in chart["palaces"]
@@ -803,6 +950,9 @@ def house_chart(
             "yun_state": star_state(yun_star, ynum),
             "level": _palace_level(shan_st, xiang_st, is_center),
             "role": _palace_role(shan_st, xiang_st, is_center),
+            # 双星组合：两星同宫的「应事」判词，与上面按旺衰得出的 level
+            # 是两个维度——level 说得不得时，pair 说出什么事
+            "pair": double_star_of(shan, xiang, shan_st, xiang_st, is_center),
             "has_lost_wuhuang": lost_wuhuang,
             "is_sit": luoshu == sit_luoshu,
             "is_face": luoshu == face_luoshu,

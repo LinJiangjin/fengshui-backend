@@ -37,6 +37,9 @@ from app.routers import (
     bazi_router,
     bazhai_router,
     diagnose_router,
+    divination_router,
+    marriage_router,
+    phone_energy_router,
     house_router,
     legal_router,
     library_router,
@@ -178,6 +181,9 @@ app.include_router(ziwei_router)
 app.include_router(bazhai_router)
 app.include_router(almanac_router)
 app.include_router(xuankong_router)
+app.include_router(divination_router)
+app.include_router(marriage_router)
+app.include_router(phone_energy_router)
 app.include_router(library_router)
 app.include_router(house_router)
 app.include_router(auth_router)
