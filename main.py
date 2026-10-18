@@ -9,14 +9,17 @@
     python scripts/init_admin.py --username admin --password 你的密码
 """
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.config import APP_ENV, CORS_ALLOW_ORIGIN_REGEX, CORS_ALLOW_ORIGINS
 from app.db import Base, SessionLocal, engine, ping
@@ -73,6 +76,34 @@ def _cors_summary() -> str:
     return " | ".join(parts) if parts else "DISABLED（不允许任何跨域来源）"
 
 
+def _maybe_seed_admin(db: Session) -> None:
+    """仅在配置了 ADMIN_USERNAME/ADMIN_PASSWORD 且库内尚无管理员时创建一个初始账号。
+
+    用途：托管部署的 SQLite 每次重建，靠环境变量保证管理后台始终有可用账号，
+    从而能登录查看注册用户。本地开发若未配置这两个变量则完全跳过，不影响已有数据。
+    """
+    from app.security import hash_password
+    from app.utils import new_id
+
+    username = (os.getenv("ADMIN_USERNAME") or "").strip()
+    password = (os.getenv("ADMIN_PASSWORD") or "").strip()
+    if not username or not password:
+        return
+    if db.query(Admin).first() is not None:
+        return
+    db.add(
+        Admin(
+            id=new_id("adm"),
+            username=username,
+            password_hash=hash_password(password),
+            display_name=(os.getenv("ADMIN_DISPLAY_NAME") or username).strip() or username,
+            status="active",
+        )
+    )
+    db.commit()
+    print(f"[startup] 已用环境变量创建初始管理员：{username}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动自检数据库连通性并自动建表。
@@ -104,6 +135,7 @@ async def lifespan(app: FastAPI):
                         "[startup] 方案库初始化完成："
                         f"{seeded_schemes} 个方案 / {seeded_notes} 条五行解读"
                     )
+                _maybe_seed_admin(session)
             except Exception as exc:  # noqa: BLE001  初始化失败不该拦住服务启动
                 print(f"[startup] seed library failed: {exc}")
             finally:
@@ -135,12 +167,29 @@ app.add_middleware(
 )
 
 
+_WEB_DIR = Path(__file__).resolve().parent / "web"
+_WEB_INDEX = _WEB_DIR / "index.html"
+
+# 这些前缀的 404 保持 JSON 错误，不做 SPA 回退（API 打错路径要返回明确错误而非首页）
+_SPA_EXEMPT_PREFIXES = ("/api/", "/api", "/admin", "/health", "/_diag")
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """把 HTTPException 包装成统一响应格式。
 
     同时保留 `detail` 字段，兼容已有的 Flutter 客户端解析逻辑。
+    另外承担 SPA 深链接回退：/login 等前端路由在静态目录里没有对应文件，
+    StaticFiles 抛 404，这里拦截后返回 index.html，交给前端路由接管
+    （API / 后台路径除外，它们的 404 必须保持原样）。
     """
+    if (
+        exc.status_code == 404
+        and request.method in ("GET", "HEAD")
+        and not request.url.path.startswith(_SPA_EXEMPT_PREFIXES)
+        and _WEB_INDEX.is_file()
+    ):
+        return FileResponse(_WEB_INDEX, media_type="text/html")
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -208,3 +257,44 @@ def health():
             "database": {"connected": db_ok, "info": db_info},
         },
     }
+
+
+@app.get("/_diag")
+def diag(request: Request):
+    """临时诊断：核对服务端实际收到的 token 与生效的密钥。
+
+    用于排查「刚登录就被判过期」——若 auth_prefix 与客户端发出的 token 不一致，
+    说明反向代理改写了 Authorization 头，改用 X-Auth-Token 通道即可绕过。
+    排查完应删除本接口，避免对外暴露配置指纹。
+    """
+    import hashlib
+
+    from app.security import JWT_SECRET
+
+    return {
+        "code": 0,
+        "data": {
+            "auth_prefix": request.headers.get("authorization", "")[:28],
+            "xauth_len": len(request.headers.get("x-auth-token") or ""),
+            "secret_sha12": hashlib.sha256(JWT_SECRET.encode()).hexdigest()[:12],
+            "env_file_exists": (Path(__file__).resolve().parent / ".env").is_file(),
+        },
+    }
+
+
+# ------------------------------------------------------------------ 静态托管（同域部署）
+# 把 Flutter Web 构建产物放到 server/web/ 后，本服务单端口同时提供页面与 API：
+# /api/v1/*、/health 等动态路由优先匹配，其余路径回退到 index.html（SPA 路由）。
+# 目录不存在时（纯 API 部署）跳过挂载，行为与原来完全一致。
+_ADMIN_WEB_DIR = Path(__file__).resolve().parent / "admin_web"
+
+if _ADMIN_WEB_DIR.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    # 管理后台挂在 /admin 子路径；必须在根挂载之前注册，否则会被 / 的 SPA 回退吞掉。
+    app.mount("/admin", StaticFiles(directory=_ADMIN_WEB_DIR, html=True), name="admin_web")
+
+if _WEB_DIR.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
