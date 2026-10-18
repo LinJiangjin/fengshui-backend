@@ -82,26 +82,39 @@ def _maybe_seed_admin(db: Session) -> None:
     用途：托管部署的 SQLite 每次重建，靠环境变量保证管理后台始终有可用账号，
     从而能登录查看注册用户。本地开发若未配置这两个变量则完全跳过，不影响已有数据。
     """
-    from app.security import hash_password
+    from app.security import hash_password, verify_password
     from app.utils import new_id
 
     username = (os.getenv("ADMIN_USERNAME") or "").strip()
     password = (os.getenv("ADMIN_PASSWORD") or "").strip()
     if not username or not password:
         return
-    if db.query(Admin).first() is not None:
-        return
-    db.add(
-        Admin(
-            id=new_id("adm"),
-            username=username,
-            password_hash=hash_password(password),
-            display_name=(os.getenv("ADMIN_DISPLAY_NAME") or username).strip() or username,
-            status="active",
+
+    admin = db.query(Admin).filter(Admin.username == username).one_or_none()
+    if admin is None:
+        db.add(
+            Admin(
+                id=new_id("adm"),
+                username=username,
+                password_hash=hash_password(password),
+                display_name=(os.getenv("ADMIN_DISPLAY_NAME") or username).strip() or username,
+                status="active",
+            )
         )
-    )
-    db.commit()
-    print(f"[startup] 已用环境变量创建初始管理员：{username}")
+        db.commit()
+        print(f"[startup] 已用环境变量创建初始管理员：{username}")
+        return
+
+    # 已存在同名账号且口令不一致时，默认**不重置**，只在显式开了 ADMIN_RESET_PASSWORD 时才覆盖。
+    # 原因：托管平台的环境变量容易被粘贴进不可见字符（空格/换行），若每次启动都强行以环境变量为准，
+    # 就会把正确的哈希反复覆盖成带脏字符的版本，表现为「后台忽然登不上」（Render 上踩过）。
+    # 需要同步口令时，用 scripts/init_admin.py 或临时开启该变量一次。
+    if os.getenv("ADMIN_RESET_PASSWORD", "").strip().lower() in ("1", "true", "yes"):
+        if not verify_password(password, admin.password_hash):
+            admin.password_hash = hash_password(password)
+            admin.status = "active"
+            db.commit()
+            print(f"[startup] 已按环境变量重置管理员口令：{username}")
 
 
 @asynccontextmanager
@@ -167,11 +180,14 @@ app.add_middleware(
 )
 
 
+_ADMIN_WEB_DIR = Path(__file__).resolve().parent / "admin_web"
+_ADMIN_INDEX = _ADMIN_WEB_DIR / "index.html"
+
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 _WEB_INDEX = _WEB_DIR / "index.html"
 
 # 这些前缀的 404 保持 JSON 错误，不做 SPA 回退（API 打错路径要返回明确错误而非首页）
-_SPA_EXEMPT_PREFIXES = ("/api/", "/api", "/admin", "/health", "/_diag")
+_SPA_EXEMPT_PREFIXES = ("/api/", "/api", "/admin", "/health")
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -183,13 +199,25 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     StaticFiles 抛 404，这里拦截后返回 index.html，交给前端路由接管
     （API / 后台路径除外，它们的 404 必须保持原样）。
     """
-    if (
-        exc.status_code == 404
-        and request.method in ("GET", "HEAD")
-        and not request.url.path.startswith(_SPA_EXEMPT_PREFIXES)
-        and _WEB_INDEX.is_file()
-    ):
-        return FileResponse(_WEB_INDEX, media_type="text/html")
+    if exc.status_code == 404 and request.method in ("GET", "HEAD"):
+        path = request.url.path
+        last_seg = path.rsplit("/", 1)[-1]
+        # 管理后台的深链接（/admin/dashboard 等）回退到后台自己的 index.html；
+        # 带扩展名的请求（.js/.css 等）是真缺文件，保持 404 不掩盖错误
+        if (
+            path.startswith("/admin")
+            and "." not in last_seg
+            and _ADMIN_INDEX.is_file()
+        ):
+            return FileResponse(_ADMIN_INDEX, media_type="text/html")
+        # Flutter Web 的深链接（/login 等前端路由）回退到 App 的 index.html；
+        # API / 后台之外的 404 都交给它，接口打错路径仍返回 JSON 错误
+        if (
+            not path.startswith(_SPA_EXEMPT_PREFIXES)
+            and "." not in last_seg
+            and _WEB_INDEX.is_file()
+        ):
+            return FileResponse(_WEB_INDEX, media_type="text/html")
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -259,35 +287,10 @@ def health():
     }
 
 
-@app.get("/_diag")
-def diag(request: Request):
-    """临时诊断：核对服务端实际收到的 token 与生效的密钥。
-
-    用于排查「刚登录就被判过期」——若 auth_prefix 与客户端发出的 token 不一致，
-    说明反向代理改写了 Authorization 头，改用 X-Auth-Token 通道即可绕过。
-    排查完应删除本接口，避免对外暴露配置指纹。
-    """
-    import hashlib
-
-    from app.security import JWT_SECRET
-
-    return {
-        "code": 0,
-        "data": {
-            "auth_prefix": request.headers.get("authorization", "")[:28],
-            "xauth_len": len(request.headers.get("x-auth-token") or ""),
-            "secret_sha12": hashlib.sha256(JWT_SECRET.encode()).hexdigest()[:12],
-            "env_file_exists": (Path(__file__).resolve().parent / ".env").is_file(),
-        },
-    }
-
-
 # ------------------------------------------------------------------ 静态托管（同域部署）
 # 把 Flutter Web 构建产物放到 server/web/ 后，本服务单端口同时提供页面与 API：
-# /api/v1/*、/health 等动态路由优先匹配，其余路径回退到 index.html（SPA 路由）。
+# /api/v1/*、/health 等动态路由优先匹配，深链接 404 由上方的异常处理器回退各端 index.html。
 # 目录不存在时（纯 API 部署）跳过挂载，行为与原来完全一致。
-_ADMIN_WEB_DIR = Path(__file__).resolve().parent / "admin_web"
-
 if _ADMIN_WEB_DIR.is_dir():
     from fastapi.staticfiles import StaticFiles
 
